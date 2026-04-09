@@ -16,3 +16,7 @@ __pycache__/
 
 # uv lock (optional – usually keep it)
 # uv.lock
+
+# Test artifacts
+test.db
+.pytest_cache/
