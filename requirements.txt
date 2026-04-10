@@ -4,7 +4,8 @@ sqlalchemy==2.0.43
 psycopg2-binary==2.9.10
 python-dotenv==1.1.0
 python-jose[cryptography]
-passlib[bcrypt]
+passlib[bcrypt]==1.7.4
+bcrypt==3.2.2
 python-multipart==0.0.18
 pydantic[email]==2.12.5
 scikit-learn
