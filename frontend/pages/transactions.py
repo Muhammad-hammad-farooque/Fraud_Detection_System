@@ -109,8 +109,8 @@ display_cols = ["id", "amount", "location", "device_id", "risk_score", "risk_lev
 styled = (
     filtered[display_cols]
     .style
-    .applymap(color_risk, subset=["risk_level"])
-    .applymap(color_decision, subset=["decision"])
+    .map(color_risk, subset=["risk_level"])
+    .map(color_decision, subset=["decision"])
 )
 
 st.dataframe(styled, use_container_width=True, hide_index=True)

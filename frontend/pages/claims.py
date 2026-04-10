@@ -92,5 +92,5 @@ STATUS_COLORS = {
 def color_status(val):
     return STATUS_COLORS.get(val, "")
 
-styled = filtered.style.applymap(color_status, subset=["status"])
+styled = filtered.style.map(color_status, subset=["status"])
 st.dataframe(styled, use_container_width=True, hide_index=True)
