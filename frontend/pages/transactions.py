@@ -42,15 +42,10 @@ if submitted:
             else:
                 st.success(f"Transaction APPROVED — Low risk (score: {score}).")
 
-            st.json({
-                "id": data["id"],
-                "amount": data["amount"],
-                "location": data["location"],
-                "risk_score": score,
-                "risk_level": risk,
-                "decision": decision,
-                "is_fraud": data["is_fraud"],
-            })
+            col_a, col_b, col_c = st.columns(3)
+            col_a.metric("Transaction ID", f"#{data['id']}")
+            col_b.metric("Risk Score", score)
+            col_c.metric("Decision", decision)
         else:
             st.error(data.get("detail", "Transaction failed."))
 
