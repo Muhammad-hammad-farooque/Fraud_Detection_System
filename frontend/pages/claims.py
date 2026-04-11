@@ -28,8 +28,9 @@ else:
         for t in transactions
     }
 
+    selected_label = st.selectbox("Select Transaction to Dispute", list(tx_options.keys()))
+
     with st.form("claim_form"):
-        selected_label = st.selectbox("Select Transaction to Dispute", list(tx_options.keys()))
         reason = st.text_area("Reason for Dispute", placeholder="Describe why you're disputing this transaction...")
         claim_amount = st.number_input(
             "Claim Amount ($)",
