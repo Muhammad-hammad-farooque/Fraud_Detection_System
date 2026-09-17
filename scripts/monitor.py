@@ -24,6 +24,11 @@ from app import models
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "logs")
 
+# Below this many confirmed outcomes the detection metrics are noise, so they
+# are suppressed rather than reported with false precision.
+MIN_LABELLED_FOR_METRICS = 20
+ALLOWED_DECISIONS = {"ALLOW"}
+
 
 def log(msg: str, log_file):
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -68,6 +73,39 @@ def compute_metrics(tp: int, fp: int, tn: int, fn: int) -> dict:
     }
 
 
+def compute_business_metrics(transactions, truth: dict) -> dict:
+    """The operating metrics from the industry reference (§10.5).
+
+    `truth` maps transaction_id to confirmed fraud. Value-based figures count
+    only transactions that have a confirmed outcome; volume-based ones count
+    everything, since approval rate does not need labels.
+    """
+    total_count = len(transactions)
+    total_value = sum(tx.amount for tx in transactions)
+    approved = [tx for tx in transactions if tx.decision in ALLOWED_DECISIONS]
+
+    confirmed_fraud_value = sum(
+        tx.amount for tx in transactions if truth.get(tx.id) is True
+    )
+    labelled_value = sum(tx.amount for tx in transactions if tx.id in truth)
+
+    return {
+        "approval_rate": len(approved) / total_count if total_count else 0.0,
+        "fraud_bps": (confirmed_fraud_value / labelled_value * 10_000) if labelled_value else None,
+        "labelled_count": len(truth),
+        "total_count": total_count,
+        "total_value": total_value,
+        "coverage": len(truth) / total_count if total_count else 0.0,
+    }
+
+
+def false_positive_ratio(tp: int, fp: int) -> str:
+    """Good transactions blocked per fraud caught, e.g. '8:1'."""
+    if tp == 0:
+        return "n/a (no fraud caught in this window)"
+    return f"{fp / tp:.1f}:1"
+
+
 def run(days: int = 1):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -96,11 +134,15 @@ def run(days: int = 1):
             truth = get_ground_truth(db, since)
             labeled = [(tx, truth[tx.id]) for tx in transactions if tx.id in truth]
 
-            log(f"Transactions with confirmed labels: {len(labeled)}", log_file)
+            business = compute_business_metrics(transactions, truth)
+            log(f"Labelled coverage: {len(labeled)} of {len(transactions)} transactions "
+                f"have confirmed outcomes ({business['coverage']:.1%})", log_file)
 
-            if not labeled:
-                log("No confirmed outcomes yet — cannot compute metrics.", log_file)
-                log("Tip: ground truth comes from transaction_outcomes (analyst review, chargebacks).", log_file)
+            if len(labeled) < MIN_LABELLED_FOR_METRICS:
+                log("", log_file)
+                log(f"WARNING: fewer than {MIN_LABELLED_FOR_METRICS} confirmed outcomes — "
+                    "detection metrics suppressed, they would be noise at this volume.", log_file)
+                log("Ground truth comes from transaction_outcomes (analyst review, chargebacks).", log_file)
             else:
                 # ── Confusion matrix ──────────────────────────────
                 tp = fp = tn = fn = 0
@@ -146,9 +188,18 @@ def run(days: int = 1):
                 if m["fn"] > 0:
                     log(f"  ALERT: {m['fn']} fraudulent transaction(s) were missed (false negatives).", log_file)
 
+                log("", log_file)
+                log("── Business Metrics ─────────────────────", log_file)
+                log(f"  Approval rate        : {business['approval_rate']:.2%}  (share of transactions allowed)", log_file)
+                log(f"  False positive ratio : {false_positive_ratio(m['tp'], m['fp'])}  (legit blocked per fraud caught)", log_file)
+                if business["fraud_bps"] is not None:
+                    log(f"  Fraud loss           : {business['fraud_bps']:.1f} bps of labelled volume", log_file)
+
             # ── Overall volume stats (no labels needed) ───────────
             log("", log_file)
             log("── Volume Stats ─────────────────────────", log_file)
+
+            log(f"  Approval rate    : {business['approval_rate']:.2%}", log_file)
 
             by_decision = defaultdict(int)
             by_risk     = defaultdict(int)
