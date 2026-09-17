@@ -101,7 +101,7 @@ POST /transactions/
 | Business logic | `app/services/fraud_services.py`, `app/policy.py` | Risk banding, device fraud, claim verification; policy maps score to action |
 | Features | `app/features.py` | Single pure feature computation path shared by serving and training |
 | Scoring engine | `app/scoring.py`, `app/fraud_detection.py` | Rule evaluation, score aggregation, `ScoreBreakdown` |
-| Inference | `app/ML/models.py` | Loads `model.pkl`, returns `(prediction, probability)` |
+| Inference | `app/ML/models.py` | Loads `model.pkl`, takes a `FeatureVector`, returns `(prediction, probability)` |
 | Persistence | `app/models.py`, `app/database.py`, `app/repositories/` | ORM entities, engine, session, bounded scoring reads |
 | Auth | `app/auth.py`, `app/dependencies.py` | JWT issue/decode, bcrypt hashing, `get_current_user` |
 | Contracts | `app/schemas.py` | Pydantic v2 request/response models |
@@ -201,14 +201,14 @@ These are defects in existing code, not missing features.
 | ~~A8~~ | ~~**Feature logic triplicated.** Computed independently in `fraud_detection.py`, `retrain.py:build_features`, and `train_model.py`. Guaranteed train/serve skew.~~ **Resolved by T-01.** | three files |
 | A9 | **Model has no real signal.** Trained on 20 hand-written rows that are perfectly separable on amount alone (legit <= 400, fraud >= 5000), fit on 100% of the data with no holdout. | `app/ML/train_model.py` |
 | A10 | **Uncalibrated probabilities used arithmetically.** RandomForest `predict_proba` is poorly calibrated, yet is multiplied by 0.3 and summed into the score as if it were a true probability. | `app/fraud_detection.py` |
-| A11 | **Feature-name mismatch.** A bare numpy array is passed to a model fitted on a DataFrame — emits a warning and relies silently on positional order. | `app/ML/models.py:15` |
-| A12 | **Naive datetime columns.** `Column(DateTime)` without `timezone=True`, forcing scattered `.replace(tzinfo=utc)` patches at every use site. | `app/models.py` |
+| ~~A11~~ | ~~**Feature-name mismatch.** A bare numpy array is passed to a model fitted on a DataFrame — emits a warning and relies silently on positional order.~~ **Resolved by T-08.** | `app/ML/models.py:15` |
+| ~~A12~~ | ~~**Naive datetime columns.** `Column(DateTime)` without `timezone=True`, forcing scattered `.replace(tzinfo=utc)` patches at every use site.~~ **Resolved by T-08.** | `app/models.py` |
 | A13 | **Dead decision states.** `MANUAL_CHECK` and `MANUAL_REVIEW` are terminal — no code path can resolve them. | system-wide |
-| A14 | **Claim amount unvalidated server-side.** The backend accepts any amount regardless of the transaction's value; only the frontend enforces a maximum. | `app/routers/claims.py` |
+| ~~A14~~ | ~~**Claim amount unvalidated server-side.** The backend accepts any amount regardless of the transaction's value; only the frontend enforces a maximum.~~ **Resolved by T-08.** | `app/routers/claims.py` |
 | A15 | **No idempotency.** A retried POST creates a duplicate transaction and falsely inflates the velocity rule. | `app/routers/transactions.py` |
 | ~~A16~~ | ~~**No cold-start handling.** A user's first transaction always has empty known locations, so `is_new_location` fires for every new customer.~~ **Resolved by T-01.** | `app/fraud_detection.py` |
 | A17 | **Test DB is file-based, not in-memory** as the docstring and README both claim. File-based SQLite can leak state between runs. | `tests/conftest.py` |
-| A18 | **`networkx` declared but never imported.** Dead dependency. | `pyproject.toml` |
+| A18 | **`networkx` declared but never imported.** Dead dependency. **Kept deliberately: T-17 uses it for graph features.** | `pyproject.toml` |
 
 ---
 
@@ -601,7 +601,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 198 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 208 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -970,12 +970,12 @@ Small independent fixes, grouped because each is a few lines.
 
 **Acceptance**
 
-- [ ] `predict_fraud` accepts a `FeatureVector` and calls `.to_frame()` — no bare numpy array, warning gone (A11)
-- [ ] All `DateTime` columns become `DateTime(timezone=True)`; every ad-hoc `.replace(tzinfo=utc)` removed (A12)
-- [ ] `ClaimCreate` validates `amount > 0` and `amount <= transaction.amount`, server-side (A14)
-- [ ] `networkx` removed from dependencies, or T-17 scheduled to use it (A18)
-- [ ] Model probability documented as uncalibrated until T-19 lands (A10)
-- [ ] Migration written for the datetime column change
+- [x] `predict_fraud` accepts a `FeatureVector` and calls `.to_frame()` — no bare numpy array, warning gone (A11)
+- [x] All `DateTime` columns become `DateTime(timezone=True)`; every ad-hoc `.replace(tzinfo=utc)` removed (A12)
+- [x] `ClaimCreate` validates `amount > 0` and `amount <= transaction.amount`, server-side (A14)
+- [x] `networkx` removed from dependencies, or T-17 scheduled to use it (A18)
+- [x] Model probability documented as uncalibrated until T-19 lands (A10)
+- [x] Migration written for the datetime column change
 
 ---
 

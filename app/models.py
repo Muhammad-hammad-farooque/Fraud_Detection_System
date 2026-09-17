@@ -27,7 +27,7 @@ class Transaction(Base):
     risk_level = Column(String, default="LOW")
     decision = Column(String, default="ALLOW")
     policy_version = Column(String, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Every scoring query filters on exactly this pair.
     __table_args__ = (Index("ix_txn_user_created", "user_id", "created_at"),)
@@ -44,7 +44,7 @@ class Claim(Base):
     reason = Column(String, nullable=False)
     amount = Column(Float, nullable=False)
     status = Column(String, default="PENDING")  # PENDING, APPROVED, REJECTED, MANUAL_REVIEW
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     transaction = relationship("Transaction", back_populates="claims")
 
@@ -70,7 +70,7 @@ class TransactionOutcome(Base):
     is_fraud_confirmed = Column(Boolean, nullable=False)
     source             = Column(String, nullable=False)
     confirmed_by       = Column(Integer, ForeignKey("users.id"), nullable=True)
-    confirmed_at       = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    confirmed_at       = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     notes              = Column(String, nullable=True)
 
     transaction = relationship("Transaction", back_populates="outcome")

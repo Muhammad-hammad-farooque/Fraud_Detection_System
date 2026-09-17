@@ -20,13 +20,7 @@ def build_feature_vector(
 
 def score_features(fv: FeatureVector) -> ScoreBreakdown:
     """Run the rules and the model over an already-computed feature vector."""
-    _, probability = predict_fraud(
-        amount=fv.amount,
-        amount_deviation=fv.amount_deviation,
-        is_new_location=fv.is_new_location,
-        is_flagged_device=fv.is_flagged_device,
-        velocity=fv.velocity_2m,
-    )
+    _, probability = predict_fraud(fv)
     return score(fv, probability, MODEL_VERSION)
 
 

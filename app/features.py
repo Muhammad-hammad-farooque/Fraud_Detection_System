@@ -46,7 +46,14 @@ class FeatureVector:
         return pd.DataFrame([asdict(self)], columns=FEATURE_ORDER)
 
 
-def _as_utc(ts: datetime) -> datetime:
+def as_utc(ts: datetime) -> datetime:
+    """Normalise a stored timestamp to UTC.
+
+    Columns are DateTime(timezone=True) since T-08, so PostgreSQL returns aware
+    datetimes. SQLite has no timezone type and still hands back naive ones, so
+    this single helper exists instead of the .replace(tzinfo=utc) patches that
+    were previously scattered across the scoring, claim and script paths (A12).
+    """
     return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
 
 
@@ -61,11 +68,11 @@ def aggregates_from_history(history: Iterable[Any], now: datetime) -> UserAggreg
     amounts: list[float] = []
     locations: set[str] = set()
     recent = 0
-    window_start = _as_utc(now) - VELOCITY_WINDOW
+    window_start = as_utc(now) - VELOCITY_WINDOW
     for t in history:
         amounts.append(float(t.amount))
         locations.add(t.location)
-        if _as_utc(t.created_at) >= window_start:
+        if as_utc(t.created_at) >= window_start:
             recent += 1
 
     count = len(amounts)

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict, Field
 from datetime import datetime
 
 # ── User ─────────────────────────────────────────────────────────
@@ -48,7 +48,9 @@ class TransactionResponse(BaseModel):
 class ClaimCreate(BaseModel):
     transaction_id: int
     reason: str
-    amount: float
+    # Must also be <= the disputed transaction's amount, which the router checks
+    # once it has loaded the transaction (A14).
+    amount: float = Field(gt=0)
 
 class ClaimResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

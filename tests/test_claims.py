@@ -149,3 +149,46 @@ class TestGetClaim:
         claim = make_claim(client, auth_headers, tx["id"]).json()
         resp = client.get(f"/claims/{claim['id']}")
         assert resp.status_code == 401
+
+
+class TestClaimAmountValidation:
+    """A14: the backend must not accept any amount the frontend happens to allow."""
+
+    def _transaction(self, client, auth_headers, amount=500.0):
+        resp = client.post(
+            "/transactions/",
+            json={"location": "New York", "amount": amount, "device_id": "device-001"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        return resp.json()
+
+    def test_amount_above_transaction_is_rejected(self, client, auth_headers):
+        txn = self._transaction(client, auth_headers, amount=500.0)
+        resp = client.post("/claims/", json={
+            "transaction_id": txn["id"], "reason": "fraud", "amount": 500.01,
+        }, headers=auth_headers)
+        assert resp.status_code == 422
+
+    def test_amount_equal_to_transaction_is_allowed(self, client, auth_headers):
+        txn = self._transaction(client, auth_headers, amount=500.0)
+        resp = client.post("/claims/", json={
+            "transaction_id": txn["id"], "reason": "fraud", "amount": 500.0,
+        }, headers=auth_headers)
+        assert resp.status_code == 201
+
+    @pytest.mark.parametrize("amount", [0.0, -1.0])
+    def test_non_positive_amount_is_rejected(self, client, auth_headers, amount):
+        txn = self._transaction(client, auth_headers, amount=500.0)
+        resp = client.post("/claims/", json={
+            "transaction_id": txn["id"], "reason": "fraud", "amount": amount,
+        }, headers=auth_headers)
+        assert resp.status_code == 422
+
+    def test_validation_happens_before_ownership_is_assumed(self, client, auth_headers, second_auth_headers):
+        """Another user's transaction stays a 404, not a leak of its amount."""
+        txn = self._transaction(client, auth_headers, amount=500.0)
+        resp = client.post("/claims/", json={
+            "transaction_id": txn["id"], "reason": "fraud", "amount": 999999.0,
+        }, headers=second_auth_headers)
+        assert resp.status_code == 404

@@ -1,6 +1,8 @@
-import joblib
-import numpy as np
 import os
+
+import joblib
+
+from ..features import FeatureVector
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.pkl")
 model = joblib.load(MODEL_PATH)
@@ -9,13 +11,19 @@ model = joblib.load(MODEL_PATH)
 # version, training date or metrics of its own.
 MODEL_VERSION = "rf-baseline-unversioned"
 
-def predict_fraud(amount: float, amount_deviation: float, is_new_location: int,
-                  is_flagged_device: int, velocity: int):
+
+def predict_fraud(fv: FeatureVector) -> tuple[int, float]:
+    """Returns (prediction, fraud_probability) for one feature vector.
+
+    The vector is passed as a DataFrame whose column order is FEATURE_ORDER, so
+    the model matches features by name rather than silently by position.
+
+    The probability is a RandomForest predict_proba output and is NOT calibrated:
+    a score of 0.7 does not mean 70% of such transactions are fraud. It is
+    consumed numerically by app/scoring.py regardless, which T-19 fixes by
+    swapping in a calibrated gradient-boosted model (A10).
     """
-    Returns (prediction: int, fraud_probability: float).
-    Features must match train_model.py exactly.
-    """
-    features = np.array([[amount, amount_deviation, is_new_location, is_flagged_device, velocity]])
-    prediction = int(model.predict(features)[0])
-    probability = float(model.predict_proba(features)[0][1])
+    frame = fv.to_frame()
+    prediction = int(model.predict(frame)[0])
+    probability = float(model.predict_proba(frame)[0][1])
     return prediction, probability

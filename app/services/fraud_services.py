@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from .. import models
-from ..features import FLAGGED_DEVICE_MIN_USERS
+from ..features import FLAGGED_DEVICE_MIN_USERS, as_utc
 from ..repositories.transaction_repo import get_device_user_count
 
 def get_risk_level(risk_score: float) -> str:
@@ -37,10 +37,7 @@ def verify_claim(db, claim_data, transaction) -> str:
 
     # Step 2: Age — reject claims older than 90 days
     now = datetime.now(timezone.utc)
-    tx_time = transaction.created_at
-    if tx_time.tzinfo is None:
-        tx_time = tx_time.replace(tzinfo=timezone.utc)
-    if (now - tx_time).days > 90:
+    if (now - as_utc(transaction.created_at)).days > 90:
         return "REJECTED"
 
     # Step 3: Pattern matching — approve clean cases, flag grey areas

@@ -46,6 +46,15 @@ def create_claim(
             detail="Transaction not found or does not belong to you"
         )
 
+    if claim.amount > transaction.amount:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Claim amount {claim.amount} exceeds the transaction amount "
+                f"{transaction.amount}"
+            ),
+        )
+
     status = verify_claim(db, claim, transaction)
 
     new_claim = models.Claim(
