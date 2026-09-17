@@ -192,7 +192,7 @@ These are defects in existing code, not missing features.
 | # | Defect | Location |
 |---|---|---|
 | ~~A1~~ | ~~**Label inversion.** APPROVED claim is mapped to fraud=1, but `verify_claim` only approves when `is_fraud is False`. The fraud class therefore contains only non-fraud transactions, so every retrain teaches the inverse of reality.~~ **Resolved by T-05.** | `scripts/retrain.py:62` |
-| A2 | **Temporal leakage.** Features are built in temporal order, then split with `train_test_split(random_state=42)`. A random split on time-ordered data trains on the future to predict the past. Needs a chronological cutoff. | `scripts/retrain.py` |
+| ~~A2~~ | ~~**Temporal leakage.** Features are built in temporal order, then split with `train_test_split(random_state=42)`. A random split on time-ordered data trains on the future to predict the past. Needs a chronological cutoff.~~ **Resolved by T-06.** | `scripts/retrain.py` |
 | A3 | **Polluted ground truth.** REJECTED claim is read as "actually legitimate", but claims are rejected for staleness and serial claiming — neither is a fraud judgement. | `scripts/monitor.py` |
 | ~~A4~~ | ~~**Prediction used as label.** `is_fraud` is derived from `risk_level == "HIGH"`, then consumed downstream as truth. A model's own output must never become its training label.~~ **Resolved by T-05.** | `app/routers/transactions.py:36` |
 | ~~A5~~ | ~~**Score saturation.** Rule weights sum to 1.8 against a cap of 1.0. Any transaction firing 3+ rules reaches 1.0 before the ML boost is added, so the model's contribution is silently discarded in exactly the cases that matter most.~~ **Resolved by T-03.** | `app/fraud_detection.py` |
@@ -601,7 +601,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 173 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 184 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -933,11 +933,11 @@ def apply_label_maturity(df: pd.DataFrame, maturity_days: int = 90) -> pd.DataFr
 
 **Acceptance**
 
-- [ ] No `train_test_split` anywhere in `retrain.py`
-- [ ] Every training timestamp is strictly earlier than every test timestamp
-- [ ] Immature labels excluded, with the count logged
-- [ ] The log states the train and test date ranges explicitly
-- [ ] Test asserting zero temporal overlap between the splits
+- [x] No `train_test_split` anywhere in `retrain.py`
+- [x] Every training timestamp is strictly earlier than every test timestamp
+- [x] Immature labels excluded, with the count logged
+- [x] The log states the train and test date ranges explicitly
+- [x] Test asserting zero temporal overlap between the splits
 
 ---
 

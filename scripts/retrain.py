@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     roc_auc_score, classification_report, confusion_matrix
 )
@@ -42,6 +41,8 @@ def log(msg: str):
 
 
 MIN_LABELLED_SAMPLES = 20
+LABEL_MATURITY_DAYS = 90
+TEST_FRACTION = 0.2
 
 
 def load_labeled_data(db) -> pd.DataFrame:
@@ -100,6 +101,46 @@ def build_features(df: pd.DataFrame, device_user_counts: dict) -> pd.DataFrame:
     return pd.concat([df.drop(columns=["amount"]), features], axis=1)
 
 
+def apply_label_maturity(df: pd.DataFrame, maturity_days: int = LABEL_MATURITY_DAYS) -> pd.DataFrame:
+    """Drop transactions newer than maturity_days. Their labels have not ripened -
+    a chargeback may still arrive. Including them understates the fraud rate."""
+    if df.empty:
+        return df
+    cutoff = pd.Timestamp(datetime.now(timezone.utc)) - pd.Timedelta(days=maturity_days)
+    created_at = _as_utc_series(df["created_at"])
+    return df[created_at <= cutoff].reset_index(drop=True)
+
+
+def chronological_split(df: pd.DataFrame, test_fraction: float = TEST_FRACTION
+                        ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Sort by created_at, cut at the (1 - test_fraction) quantile.
+    All training rows strictly precede all test rows."""
+    df = df.sort_values("created_at").reset_index(drop=True)
+    if df.empty:
+        return df, df
+
+    created_at = _as_utc_series(df["created_at"])
+    cut_index = int(len(df) * (1 - test_fraction))
+    cut_index = min(max(cut_index, 1), len(df) - 1) if len(df) > 1 else len(df)
+    # Cut on the timestamp, not the row index: rows sharing the boundary
+    # timestamp all belong to the test side, so the two sets never overlap in time.
+    cutoff = created_at.iloc[cut_index]
+    train = df[created_at < cutoff].reset_index(drop=True)
+    test = df[created_at >= cutoff].reset_index(drop=True)
+    return train, test
+
+
+def _as_utc_series(created_at: pd.Series) -> pd.Series:
+    """Timestamps arrive naive from SQLite and aware from Postgres."""
+    series = pd.to_datetime(created_at, utc=True)
+    return series
+
+
+def _date_range(df: pd.DataFrame) -> str:
+    created_at = _as_utc_series(df["created_at"])
+    return f"{created_at.min():%Y-%m-%d %H:%M} .. {created_at.max():%Y-%m-%d %H:%M} UTC"
+
+
 def evaluate(model, X_test, y_test, label: str) -> float:
     y_pred      = model.predict(X_test)
     y_prob      = model.predict_proba(X_test)[:, 1]
@@ -137,27 +178,45 @@ def run():
             log("Only one class in labeled data — cannot train. Exiting.")
             return
 
-        # ── 2. Build features ─────────────────────────────────────
+        # ── 2. Drop labels that have not ripened yet ──────────────
+        before = len(df)
+        df = apply_label_maturity(df)
+        log(f"Label maturity: dropped {before - len(df)} transaction(s) newer than "
+            f"{LABEL_MATURITY_DAYS} days; {len(df)} remain")
+
+        if len(df) < MIN_LABELLED_SAMPLES or df["fraud"].nunique() < 2:
+            log("Not enough mature labelled data after the maturity cutoff. Exiting.")
+            return
+
+        # ── 3. Build features ─────────────────────────────────────
         device_user_counts = (
             df.groupby("device_id")["user_id"].nunique().to_dict()
         )
         df = build_features(df, device_user_counts)
 
-        X = df[FEATURE_ORDER].values
-        y = df["fraud"].values
+        # ── 4. Chronological split ────────────────────────────────
+        # A random split on time-ordered data trains on the future to predict
+        # the past, which inflates every metric. The cut is on time instead.
+        train_df, test_df = chronological_split(df)
+        if train_df.empty or test_df.empty:
+            log("Chronological split left one side empty. Exiting.")
+            return
 
-        # ── 3. Train / test split ─────────────────────────────────
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
-        )
-        log(f"Train size: {len(X_train)}  Test size: {len(X_test)}")
+        X_train, y_train = train_df[FEATURE_ORDER].values, train_df["fraud"].values
+        X_test, y_test = test_df[FEATURE_ORDER].values, test_df["fraud"].values
+        log(f"Train size: {len(X_train)}  ({_date_range(train_df)})")
+        log(f"Test  size: {len(X_test)}  ({_date_range(test_df)})")
 
-        # ── 4. Train new model ────────────────────────────────────
+        if len(set(y_test)) < 2:
+            log("Test window contains a single class — AUC is undefined. Exiting.")
+            return
+
+        # ── 5. Train new model ────────────────────────────────────
         new_model = RandomForestClassifier(n_estimators=100, random_state=42)
         new_model.fit(X_train, y_train)
         new_auc = evaluate(new_model, X_test, y_test, "New Model")
 
-        # ── 5. Evaluate current deployed model ────────────────────
+        # ── 6. Evaluate current deployed model ────────────────────
         if os.path.exists(MODEL_PATH):
             old_model = joblib.load(MODEL_PATH)
             try:
@@ -169,7 +228,7 @@ def run():
             log("No existing model.pkl found. Deploying new model directly.")
             old_auc = 0.0
 
-        # ── 6. Champion / challenger decision ─────────────────────
+        # ── 7. Champion / challenger decision ─────────────────────
         if new_auc > old_auc:
             joblib.dump(new_model, MODEL_PATH)
             log(f"New model deployed. AUC {new_auc:.4f} > {old_auc:.4f}")
