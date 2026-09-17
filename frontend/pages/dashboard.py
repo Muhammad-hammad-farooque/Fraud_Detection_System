@@ -24,7 +24,7 @@ claims = cl_data if isinstance(cl_data, list) else []
 
 # ── Key Metrics ───────────────────────────────────────────────────────────────
 total = len(transactions)
-fraud_count = sum(1 for t in transactions if t["is_fraud"])
+fraud_count = sum(1 for t in transactions if t["predicted_fraud"])
 pending_claims = sum(1 for c in claims if c["status"] == "PENDING")
 high_risk = sum(1 for t in transactions if t["risk_level"] == "HIGH")
 
@@ -72,13 +72,13 @@ st.line_chart(daily.set_index("date"))
 st.subheader("Recent Transactions")
 
 def style_row(row):
-    if row["is_fraud"]:
+    if row["predicted_fraud"]:
         return ["background-color: #ffcccc"] * len(row)
     elif row["risk_level"] == "MEDIUM":
         return ["background-color: #fff3cc"] * len(row)
     return [""] * len(row)
 
-display_cols = ["id", "amount", "location", "device_id", "risk_score", "risk_level", "decision", "is_fraud", "created_at"]
+display_cols = ["id", "amount", "location", "device_id", "risk_score", "risk_level", "decision", "predicted_fraud", "created_at"]
 recent = df.sort_values("created_at", ascending=False).head(10)[display_cols].copy()
 recent["risk_score"] = recent["risk_score"].round(3)
 recent["created_at"] = recent["created_at"].dt.strftime("%Y-%m-%d %H:%M")

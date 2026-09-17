@@ -37,7 +37,7 @@ class TransactionResponse(BaseModel):
     location: str
     amount: float
     device_id: str
-    is_fraud: bool
+    predicted_fraud: bool
     risk_score: float
     risk_level: str
     decision: str

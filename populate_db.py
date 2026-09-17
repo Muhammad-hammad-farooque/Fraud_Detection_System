@@ -192,7 +192,7 @@ def populate():
                 amount     = amount,
                 location   = location,
                 device_id  = device_id,
-                is_fraud   = is_fraud_tx,
+                predicted_fraud = is_fraud_tx,
                 risk_score = risk_score,
                 risk_level = risk_level,
                 decision   = decision,
@@ -213,7 +213,7 @@ def populate():
         # ── 5. Create Claims for fraud transactions ───────────────
         print("Creating claims for fraud transactions...")
         all_transactions = db.query(models.Transaction).all()
-        fraud_transactions = [t for t in all_transactions if t.is_fraud]
+        fraud_transactions = [t for t in all_transactions if t.predicted_fraud]
 
         claim_count = 0
         for tx in fraud_transactions:
@@ -244,7 +244,7 @@ def populate():
             claim_count += 1
 
         # Also add a few false claims on legit transactions (serial claimers)
-        legit_transactions = [t for t in all_transactions if not t.is_fraud]
+        legit_transactions = [t for t in all_transactions if not t.predicted_fraud]
         serial_claimer_txs = random.sample(legit_transactions, min(50, len(legit_transactions)))
 
         for tx in serial_claimer_txs:

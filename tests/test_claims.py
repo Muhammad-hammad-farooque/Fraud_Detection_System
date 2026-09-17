@@ -59,10 +59,10 @@ class TestClaimVerificationLogic:
     def test_first_clean_claim_is_approved(self, client, auth_headers):
         """Non-fraud transaction with zero prior claims → APPROVED."""
         tx = make_transaction(client, auth_headers, {"location": "NY", "amount": 50.0, "device_id": "d1"})
-        # Force non-fraud by using a safe amount (is_fraud depends on ML + rules)
+        # Force non-fraud by using a safe amount (predicted_fraud depends on ML + rules)
         resp = make_claim(client, auth_headers, tx["id"])
         data = resp.json()
-        # APPROVED only if is_fraud is False; otherwise MANUAL_REVIEW — both are acceptable
+        # APPROVED only if predicted_fraud is False; otherwise MANUAL_REVIEW — both are acceptable
         assert data["status"] in ("APPROVED", "MANUAL_REVIEW")
 
     def test_serial_claimer_is_rejected(self, client, auth_headers):

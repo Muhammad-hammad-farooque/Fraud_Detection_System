@@ -114,8 +114,10 @@ POST /transactions/
 User (1) ---< (N) Transaction (1) ---< (N) Claim
 
 User         : id, name, email, hashed_password
-Transaction  : id, user_id, location, amount, device_id,
-               is_fraud, risk_score, risk_level, decision, created_at
+Transaction  : id, user_id, location, amount, device_id, predicted_fraud,
+               risk_score, risk_level, decision, policy_version, created_at
+TransactionOutcome : id, transaction_id, is_fraud_confirmed, source,
+               confirmed_by, confirmed_at, notes   (ground truth, T-05)
 Claim        : id, transaction_id, reason, amount, status, created_at
 ```
 
@@ -189,10 +191,10 @@ These are defects in existing code, not missing features.
 
 | # | Defect | Location |
 |---|---|---|
-| A1 | **Label inversion.** APPROVED claim is mapped to fraud=1, but `verify_claim` only approves when `is_fraud is False`. The fraud class therefore contains only non-fraud transactions, so every retrain teaches the inverse of reality. | `scripts/retrain.py:62` |
+| ~~A1~~ | ~~**Label inversion.** APPROVED claim is mapped to fraud=1, but `verify_claim` only approves when `is_fraud is False`. The fraud class therefore contains only non-fraud transactions, so every retrain teaches the inverse of reality.~~ **Resolved by T-05.** | `scripts/retrain.py:62` |
 | A2 | **Temporal leakage.** Features are built in temporal order, then split with `train_test_split(random_state=42)`. A random split on time-ordered data trains on the future to predict the past. Needs a chronological cutoff. | `scripts/retrain.py` |
 | A3 | **Polluted ground truth.** REJECTED claim is read as "actually legitimate", but claims are rejected for staleness and serial claiming — neither is a fraud judgement. | `scripts/monitor.py` |
-| A4 | **Prediction used as label.** `is_fraud` is derived from `risk_level == "HIGH"`, then consumed downstream as truth. A model's own output must never become its training label. | `app/routers/transactions.py:36` |
+| ~~A4~~ | ~~**Prediction used as label.** `is_fraud` is derived from `risk_level == "HIGH"`, then consumed downstream as truth. A model's own output must never become its training label.~~ **Resolved by T-05.** | `app/routers/transactions.py:36` |
 | ~~A5~~ | ~~**Score saturation.** Rule weights sum to 1.8 against a cap of 1.0. Any transaction firing 3+ rules reaches 1.0 before the ML boost is added, so the model's contribution is silently discarded in exactly the cases that matter most.~~ **Resolved by T-03.** | `app/fraud_detection.py` |
 | ~~A6~~ | ~~**Correlated rules double-count.** Rules 1 and 2 (high amount, high deviation) almost always fire together, producing 0.8 and an instant REJECT. A false-positive generator.~~ **Resolved by T-03.** | `app/fraud_detection.py` |
 | ~~A7~~ | ~~**Unbounded history load.** Scoring calls `.all()` on the user's entire transaction history and iterates it in Python — O(n) latency and memory per request.~~ **Resolved by T-02.** | `app/routers/transactions.py:22` |
@@ -599,7 +601,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 161 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 173 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -898,12 +900,12 @@ class TransactionOutcome(Base):
 
 **Acceptance**
 
-- [ ] `retrain.py` reads labels **only** from `TransactionOutcome`, never from `Claim` or `is_fraud`
-- [ ] `monitor.py` reads ground truth **only** from `TransactionOutcome`
-- [ ] `Transaction.is_fraud` renamed to `predicted_fraud` to stop the conflation
-- [ ] `retrain.py` exits cleanly with a clear log line when too few confirmed outcomes exist
-- [ ] Unique constraint on `transaction_id` — one outcome per transaction
-- [ ] Tests covering each `OutcomeSource`
+- [x] `retrain.py` reads labels **only** from `TransactionOutcome`, never from `Claim` or `is_fraud`
+- [x] `monitor.py` reads ground truth **only** from `TransactionOutcome`
+- [x] `Transaction.is_fraud` renamed to `predicted_fraud` to stop the conflation
+- [x] `retrain.py` exits cleanly with a clear log line when too few confirmed outcomes exist
+- [x] Unique constraint on `transaction_id` — one outcome per transaction
+- [x] Tests covering each `OutcomeSource`
 
 ---
 

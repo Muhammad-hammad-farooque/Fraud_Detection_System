@@ -88,9 +88,9 @@ if risk_filter != "All":
 if decision_filter != "All":
     filtered = filtered[filtered["decision"] == decision_filter]
 if fraud_filter == "Fraud only":
-    filtered = filtered[filtered["is_fraud"] == True]
+    filtered = filtered[filtered["predicted_fraud"] == True]
 elif fraud_filter == "Clean only":
-    filtered = filtered[filtered["is_fraud"] == False]
+    filtered = filtered[filtered["predicted_fraud"] == False]
 
 st.caption(f"Showing {len(filtered)} of {len(df)} transactions")
 
@@ -107,7 +107,7 @@ def color_decision(val):
     }
     return colors.get(val, "")
 
-display_cols = ["id", "amount", "location", "device_id", "risk_score", "risk_level", "decision", "is_fraud", "created_at"]
+display_cols = ["id", "amount", "location", "device_id", "risk_score", "risk_level", "decision", "predicted_fraud", "created_at"]
 styled = (
     filtered[display_cols]
     .style

@@ -41,43 +41,40 @@ def log(msg: str):
         f.write(line + "\n")
 
 
+MIN_LABELLED_SAMPLES = 20
+
+
 def load_labeled_data(db) -> pd.DataFrame:
     """
-    Build a labeled dataset from the database.
+    Build a labeled dataset from confirmed outcomes only.
 
-    Label logic (ground truth):
-      - APPROVED claim on a transaction  →  confirmed fraud (1)
-      - No claim + model said NOT fraud  →  confirmed legitimate (0)
-      - Everything else (MANUAL_REVIEW, REJECTED claim) → skipped (ambiguous)
+    Ground truth comes exclusively from TransactionOutcome - an investigator
+    determination, a chargeback, a customer report, or an exploration holdout.
+    Claim status is not a fraud judgement, and the model's own predicted_fraud
+    output must never become its training label (A1, A4).
     """
-    transactions = db.query(models.Transaction).all()
-    claims       = db.query(models.Claim).all()
+    rows = (
+        db.query(models.Transaction, models.TransactionOutcome)
+        .join(
+            models.TransactionOutcome,
+            models.TransactionOutcome.transaction_id == models.Transaction.id,
+        )
+        .all()
+    )
 
-    # Map transaction_id → claim status
-    claim_map = {c.transaction_id: c.status for c in claims}
-
-    rows = []
-    for tx in transactions:
-        status = claim_map.get(tx.id)
-
-        if status == "APPROVED":
-            confirmed_fraud = 1
-        elif status is None and tx.is_fraud is False:
-            confirmed_fraud = 0
-        else:
-            continue  # skip ambiguous labels
-
-        rows.append({
+    return pd.DataFrame([
+        {
             "id":         tx.id,
             "user_id":    tx.user_id,
             "amount":     tx.amount,
             "location":   tx.location,
             "device_id":  tx.device_id,
             "created_at": tx.created_at,
-            "fraud":      confirmed_fraud,
-        })
-
-    return pd.DataFrame(rows)
+            "source":     outcome.source,
+            "fraud":      int(bool(outcome.is_fraud_confirmed)),
+        }
+        for tx, outcome in rows
+    ])
 
 
 def build_features(df: pd.DataFrame, device_user_counts: dict) -> pd.DataFrame:
@@ -124,10 +121,16 @@ def run():
     try:
         # ── 1. Load labeled data ──────────────────────────────────
         df = load_labeled_data(db)
-        log(f"Labeled samples: {len(df)}  (fraud={df['fraud'].sum()}, legit={(df['fraud']==0).sum()})")
+        if df.empty:
+            log("No confirmed outcomes in transaction_outcomes — nothing to train on. Exiting.")
+            log("Labels come from analyst review, chargebacks or exploration holdouts, never from claims.")
+            return
 
-        if len(df) < 20:
-            log("Not enough labeled data to retrain (need at least 20 samples). Exiting.")
+        log(f"Labeled samples: {len(df)}  (fraud={df['fraud'].sum()}, legit={(df['fraud']==0).sum()})")
+        log(f"Label sources: {df['source'].value_counts().to_dict()}")
+
+        if len(df) < MIN_LABELLED_SAMPLES:
+            log(f"Only {len(df)} confirmed outcomes, need at least {MIN_LABELLED_SAMPLES}. Exiting.")
             return
 
         if df["fraud"].nunique() < 2:

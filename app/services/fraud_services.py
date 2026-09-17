@@ -44,7 +44,7 @@ def verify_claim(db, claim_data, transaction) -> str:
         return "REJECTED"
 
     # Step 3: Pattern matching — approve clean cases, flag grey areas
-    if transaction.is_fraud is False and previous_claims_count == 0:
+    if transaction.predicted_fraud is False and previous_claims_count == 0:
         return "APPROVED"
 
     return "MANUAL_REVIEW"

@@ -1,8 +1,8 @@
 """
 Model Performance Monitor
 --------------------------
-Queries the last N days of transactions, joins with confirmed claim
-outcomes, and reports daily fraud detection metrics.
+Queries the last N days of transactions, joins with confirmed outcomes
+from transaction_outcomes, and reports daily fraud detection metrics.
 
 Logs are written to logs/monitor_YYYY-MM-DD.log
 
@@ -34,24 +34,22 @@ def log(msg: str, log_file):
 
 def get_ground_truth(db, since: datetime) -> dict:
     """
-    Returns a dict:  transaction_id → actual_fraud (bool | None)
+    Returns a dict:  transaction_id → actual_fraud (bool)
 
-    Ground truth comes from claims:
-      APPROVED claim  → actual fraud     = True
-      REJECTED claim  → actual fraud     = False
-      No claim        → unknown          = None (excluded from metrics)
+    Ground truth comes only from TransactionOutcome. Claim status is not a fraud
+    judgement: claims are rejected for staleness and serial claiming, neither of
+    which says anything about whether the transaction was fraudulent (A3).
     """
-    claims = db.query(models.Claim).join(models.Transaction).filter(
-        models.Transaction.created_at >= since
-    ).all()
-
-    truth = {}
-    for claim in claims:
-        if claim.status == "APPROVED":
-            truth[claim.transaction_id] = True
-        elif claim.status == "REJECTED":
-            truth[claim.transaction_id] = False
-    return truth
+    outcomes = (
+        db.query(models.TransactionOutcome)
+        .join(
+            models.Transaction,
+            models.Transaction.id == models.TransactionOutcome.transaction_id,
+        )
+        .filter(models.Transaction.created_at >= since)
+        .all()
+    )
+    return {o.transaction_id: bool(o.is_fraud_confirmed) for o in outcomes}
 
 
 def compute_metrics(tp: int, fp: int, tn: int, fn: int) -> dict:
@@ -94,20 +92,20 @@ def run(days: int = 1):
 
             log(f"Transactions in window: {len(transactions)}", log_file)
 
-            # ── Get ground truth labels from claims ───────────────
+            # ── Get ground truth labels from confirmed outcomes ───
             truth = get_ground_truth(db, since)
             labeled = [(tx, truth[tx.id]) for tx in transactions if tx.id in truth]
 
             log(f"Transactions with confirmed labels: {len(labeled)}", log_file)
 
             if not labeled:
-                log("No confirmed claim outcomes yet — cannot compute metrics.", log_file)
-                log("Tip: Claims with APPROVED/REJECTED status provide ground truth.", log_file)
+                log("No confirmed outcomes yet — cannot compute metrics.", log_file)
+                log("Tip: ground truth comes from transaction_outcomes (analyst review, chargebacks).", log_file)
             else:
                 # ── Confusion matrix ──────────────────────────────
                 tp = fp = tn = fn = 0
                 for tx, actual_fraud in labeled:
-                    predicted_fraud = tx.is_fraud
+                    predicted_fraud = tx.predicted_fraud
                     if predicted_fraud and actual_fraud:
                         tp += 1
                     elif predicted_fraud and not actual_fraud:
@@ -159,7 +157,7 @@ def run(days: int = 1):
             for tx in transactions:
                 by_decision[tx.decision] += 1
                 by_risk[tx.risk_level]   += 1
-                if tx.is_fraud:
+                if tx.predicted_fraud:
                     flagged += 1
 
             log(f"  Flagged as fraud : {flagged} / {len(transactions)}", log_file)

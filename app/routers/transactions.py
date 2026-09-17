@@ -24,14 +24,14 @@ def create_transaction(
     risk_level = get_risk_level(risk_score)
     policy     = load_policy_config()
     decision   = decide(risk_score, PolicyContext(amount=transaction.amount), policy)
-    is_fraud   = decision == Decision.REJECT
+    predicted_fraud = decision == Decision.REJECT
 
     new_transaction = models.Transaction(
         user_id=current_user.id,
         location=transaction.location,
         amount=transaction.amount,
         device_id=transaction.device_id,
-        is_fraud=is_fraud,
+        predicted_fraud=predicted_fraud,
         risk_score=risk_score,
         risk_level=risk_level,
         decision=decision.value,

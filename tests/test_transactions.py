@@ -18,7 +18,7 @@ class TestCreateTransaction:
         assert "risk_score" in data
         assert "risk_level" in data
         assert "decision" in data
-        assert "is_fraud" in data
+        assert "predicted_fraud" in data
         assert "created_at" in data
 
     def test_create_transaction_unauthenticated(self, client):
@@ -80,8 +80,8 @@ class TestFraudRules:
         resp = client.post("/transactions/", json={**BASE_TX, "location": "Brand New City"}, headers=auth_headers)
         assert resp.json()["risk_score"] < 0.2
 
-    def test_is_fraud_true_for_high_risk(self, client, auth_headers):
-        """A transaction that clears the HIGH threshold should be marked is_fraud=True."""
+    def test_predicted_fraud_true_for_high_risk(self, client, auth_headers):
+        """A transaction that clears the HIGH threshold should be marked predicted_fraud=True."""
         # Fires R1 (amount > 5000), R2 (90x the user's average), R3 (new location)
         # and R4 (shared device). After T-03 those four weights normalise to
         # 1.0/1.5 of the rule half of the score, which clears HIGH once the model
@@ -113,7 +113,7 @@ class TestFraudRules:
         }, headers=auth_headers)
         data = resp.json()
         assert data["risk_score"] >= 0.7
-        assert data["is_fraud"] is True
+        assert data["predicted_fraud"] is True
         assert data["decision"] == "REJECT"
 
 

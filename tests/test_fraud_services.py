@@ -74,11 +74,11 @@ class TestVerifyClaim:
         db.query.return_value = mock_query
         return db
 
-    def _fresh_transaction(self, is_fraud=False):
+    def _fresh_transaction(self, predicted_fraud=False):
         from datetime import datetime, timezone
         tx = MagicMock()
         tx.user_id = 1
-        tx.is_fraud = is_fraud
+        tx.predicted_fraud = predicted_fraud
         tx.created_at = datetime.now(timezone.utc)
         return tx
 
@@ -86,13 +86,13 @@ class TestVerifyClaim:
         from datetime import datetime, timedelta, timezone
         tx = MagicMock()
         tx.user_id = 1
-        tx.is_fraud = False
+        tx.predicted_fraud = False
         tx.created_at = datetime.now(timezone.utc) - timedelta(days=100)
         return tx
 
     def test_first_clean_claim_approved(self):
         db = self._make_db(0)
-        tx = self._fresh_transaction(is_fraud=False)
+        tx = self._fresh_transaction(predicted_fraud=False)
         result = verify_claim(db, MagicMock(), tx)
         assert result == "APPROVED"
 
@@ -110,13 +110,13 @@ class TestVerifyClaim:
 
     def test_fraud_transaction_manual_review(self):
         db = self._make_db(0)
-        tx = self._fresh_transaction(is_fraud=True)
+        tx = self._fresh_transaction(predicted_fraud=True)
         result = verify_claim(db, MagicMock(), tx)
         assert result == "MANUAL_REVIEW"
 
     def test_repeat_claimer_manual_review(self):
         db = self._make_db(2)           # 2 prior claims, ≤ 3
-        tx = self._fresh_transaction(is_fraud=False)
+        tx = self._fresh_transaction(predicted_fraud=False)
         result = verify_claim(db, MagicMock(), tx)
         assert result == "MANUAL_REVIEW"
 
