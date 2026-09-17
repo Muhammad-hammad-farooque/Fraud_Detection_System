@@ -20,3 +20,6 @@ __pycache__/
 # Test artifacts
 test.db
 .pytest_cache/
+# Coverage
+.coverage
+htmlcov/
