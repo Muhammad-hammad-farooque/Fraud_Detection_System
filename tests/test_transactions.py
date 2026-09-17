@@ -60,15 +60,23 @@ class TestFraudRules:
         assert data["risk_score"] >= 0.4
 
     def test_new_location_increases_risk(self, client, auth_headers):
-        """First-ever transaction has a new location, adding 0.2."""
+        """A location unseen in the user's history adds 0.2."""
+        client.post("/transactions/", json=BASE_TX, headers=auth_headers)
         resp = client.post("/transactions/", json={**BASE_TX, "location": "Brand New City"}, headers=auth_headers)
         data = resp.json()
-        # New location adds 0.2 — risk_score should be > 0
-        assert data["risk_score"] > 0.0
+        assert data["risk_score"] >= 0.2
+
+    def test_first_transaction_location_not_penalised(self, client, auth_headers):
+        """Cold start (A16): a user's first transaction has no history, so its location is not 'new'."""
+        resp = client.post("/transactions/", json={**BASE_TX, "location": "Brand New City"}, headers=auth_headers)
+        assert resp.json()["risk_score"] < 0.2
 
     def test_is_fraud_true_for_high_risk(self, client, auth_headers):
         """A transaction that clears the HIGH threshold should be marked is_fraud=True."""
-        # Amount > 5000 (0.4) + new location (0.2) + shared device (0.3) = 0.9 before ML
+        # Amount > 5000 (0.4) + 90x the user's average (0.4) + new location (0.2) = 1.0 before ML.
+        # The user needs prior history: a first-ever transaction gets no deviation or
+        # new-location penalty (cold start, A16).
+        client.post("/transactions/", json=BASE_TX, headers=auth_headers)
         # Register two more users on the same device to trigger shared-device rule
         client.post("/auth/register", json={"name": "U2", "email": "u2@test.com", "password": "p"})
         r2 = client.post("/auth/login", json={"email": "u2@test.com", "password": "p"})

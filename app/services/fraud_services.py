@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from .. import models
+from ..features import FLAGGED_DEVICE_MIN_USERS
 
 def get_risk_level(risk_score: float) -> str:
     if risk_score < 0.3:
@@ -17,15 +18,19 @@ def get_decision(risk_level: str) -> str:
     else:
         return "REJECT"
 
-def detect_device_fraud(db, device_id: str) -> bool:
-    """Returns True if the device has been used by 3 or more distinct users."""
+def count_device_users(db, device_id: str) -> int:
+    """Number of distinct users who have transacted on this device."""
     users = (
         db.query(models.Transaction.user_id)
         .filter(models.Transaction.device_id == device_id)
         .distinct()
         .all()
     )
-    return len(users) >= 3
+    return len(users)
+
+def detect_device_fraud(db, device_id: str) -> bool:
+    """Returns True if the device has been used by 3 or more distinct users."""
+    return count_device_users(db, device_id) >= FLAGGED_DEVICE_MIN_USERS
 
 def verify_claim(db, claim_data, transaction) -> str:
     """

@@ -11,6 +11,7 @@ Usage:
 
 import os
 import sys
+from dataclasses import asdict
 import joblib
 import numpy as np
 import pandas as pd
@@ -26,6 +27,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal
 from app import models
+from app.features import FEATURE_ORDER, aggregates_from_history, compute_features
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "ML", "model.pkl")
 LOG_PATH   = os.path.join(os.path.dirname(__file__), "..", "logs", "retrain.log")
@@ -80,50 +82,25 @@ def load_labeled_data(db) -> pd.DataFrame:
 
 def build_features(df: pd.DataFrame, device_user_counts: dict) -> pd.DataFrame:
     """
-    Recompute the same 5 features used during training, preserving
-    the temporal order so we never use future information.
+    Recompute features through app.features, preserving temporal order so
+    each row only sees the user's strictly earlier transactions.
     """
     df = df.sort_values("created_at").reset_index(drop=True)
 
-    amount_deviation  = []
-    is_new_location   = []
-    is_flagged_device = []
-    velocity          = []
-
+    vectors = []
     for i, row in df.iterrows():
         history = df[(df["user_id"] == row["user_id"]) & (df.index < i)]
+        aggregates = aggregates_from_history(history.itertuples(index=False), row["created_at"])
+        fv = compute_features(
+            amount=row["amount"],
+            location=row["location"],
+            aggregates=aggregates,
+            device_user_count=device_user_counts.get(row["device_id"], 0),
+        )
+        vectors.append(asdict(fv))
 
-        # Feature 1: amount deviation from user's own average
-        if len(history) > 0 and history["amount"].mean() > 0:
-            dev = row["amount"] / history["amount"].mean()
-        else:
-            dev = 1.0
-        amount_deviation.append(dev)
-
-        # Feature 2: new location for this user
-        seen_locations = set(history["location"].tolist())
-        is_new_location.append(0 if row["location"] in seen_locations else 1)
-
-        # Feature 3: device shared by 3+ distinct users (full dataset view)
-        is_flagged_device.append(1 if device_user_counts.get(row["device_id"], 0) >= 3 else 0)
-
-        # Feature 4: transaction velocity (same user, last 120 seconds)
-        tx_time = row["created_at"]
-        if tx_time.tzinfo is None:
-            tx_time = tx_time.replace(tzinfo=timezone.utc)
-        recent = history[
-            history["created_at"].apply(
-                lambda t: (t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t)
-            ) >= tx_time - pd.Timedelta(seconds=120)
-        ]
-        velocity.append(len(recent))
-
-    df["amount_deviation"]  = amount_deviation
-    df["is_new_location"]   = is_new_location
-    df["is_flagged_device"] = is_flagged_device
-    df["velocity"]          = velocity
-
-    return df
+    features = pd.DataFrame(vectors, columns=FEATURE_ORDER, index=df.index)
+    return pd.concat([df.drop(columns=["amount"]), features], axis=1)
 
 
 def evaluate(model, X_test, y_test, label: str) -> float:
@@ -163,8 +140,7 @@ def run():
         )
         df = build_features(df, device_user_counts)
 
-        FEATURES = ["amount", "amount_deviation", "is_new_location", "is_flagged_device", "velocity"]
-        X = df[FEATURES].values
+        X = df[FEATURE_ORDER].values
         y = df["fraud"].values
 
         # ── 3. Train / test split ─────────────────────────────────

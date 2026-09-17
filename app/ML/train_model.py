@@ -1,6 +1,12 @@
+import os
+import sys
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 import joblib
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from app.features import FEATURE_ORDER
 
 # Synthetic training data with meaningful fraud signals:
 # Features: amount, amount_deviation (ratio to user avg), is_new_location,
@@ -14,7 +20,7 @@ data = {
                           1,    1,    1,    1,    0,    1,    1,    0,    1,    1],
     "is_flagged_device": [0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
                           0,    1,    1,    0,    1,    1,    0,    1,    0,    1],
-    "velocity":          [1,    2,    1,    3,    2,    1,    2,    1,    3,    2,
+    "velocity_2m":       [1,    2,    1,    3,    2,    1,    2,    1,    3,    2,
                           1,    2,    8,    6,    10,   7,    3,    5,    4,    9],
     "fraud":             [0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
                           1,    1,    1,    1,    1,    1,    1,    1,    1,    1],
@@ -22,7 +28,7 @@ data = {
 
 df = pd.DataFrame(data)
 
-X = df[["amount", "amount_deviation", "is_new_location", "is_flagged_device", "velocity"]]
+X = df[FEATURE_ORDER]
 y = df["fraud"]
 
 model = RandomForestClassifier(n_estimators=100, random_state=42)
