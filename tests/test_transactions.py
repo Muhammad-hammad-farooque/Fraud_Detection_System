@@ -54,17 +54,26 @@ class TestFraudRules:
         assert data["risk_score"] < 0.7        # not flagged as HIGH
 
     def test_high_amount_increases_risk(self, client, auth_headers):
-        """Amount > 5 000 adds 0.4 to the risk score."""
-        resp = client.post("/transactions/", json={**BASE_TX, "amount": 6000.0}, headers=auth_headers)
-        data = resp.json()
-        assert data["risk_score"] >= 0.4
+        """Amount > 5 000 fires R1_HIGH_AMOUNT and must raise the score.
+
+        T-03 normalises the rule score by the total rule weight, so an absolute
+        threshold is asserted against a comparable baseline rather than against
+        the old raw 0.4 weight.
+        """
+        low = client.post("/transactions/", json={**BASE_TX, "amount": 10.0}, headers=auth_headers)
+        high = client.post("/transactions/", json={**BASE_TX, "amount": 6000.0}, headers=auth_headers)
+        assert high.json()["risk_score"] > low.json()["risk_score"]
 
     def test_new_location_increases_risk(self, client, auth_headers):
-        """A location unseen in the user's history adds 0.2."""
+        """A location unseen in the user's history fires R3_NEW_LOCATION.
+
+        Compared against the same transaction from a known location, because
+        T-03 normalises rule weights instead of adding a raw 0.2.
+        """
         client.post("/transactions/", json=BASE_TX, headers=auth_headers)
-        resp = client.post("/transactions/", json={**BASE_TX, "location": "Brand New City"}, headers=auth_headers)
-        data = resp.json()
-        assert data["risk_score"] >= 0.2
+        known = client.post("/transactions/", json=BASE_TX, headers=auth_headers)
+        new_city = client.post("/transactions/", json={**BASE_TX, "location": "Brand New City"}, headers=auth_headers)
+        assert new_city.json()["risk_score"] > known.json()["risk_score"]
 
     def test_first_transaction_location_not_penalised(self, client, auth_headers):
         """Cold start (A16): a user's first transaction has no history, so its location is not 'new'."""
@@ -73,11 +82,14 @@ class TestFraudRules:
 
     def test_is_fraud_true_for_high_risk(self, client, auth_headers):
         """A transaction that clears the HIGH threshold should be marked is_fraud=True."""
-        # Amount > 5000 (0.4) + 90x the user's average (0.4) + new location (0.2) = 1.0 before ML.
+        # Fires R1 (amount > 5000), R2 (90x the user's average), R3 (new location)
+        # and R4 (shared device). After T-03 those four weights normalise to
+        # 1.0/1.5 of the rule half of the score, which clears HIGH once the model
+        # agrees; the correlated pair R1+R2 alone no longer would (A6).
         # The user needs prior history: a first-ever transaction gets no deviation or
         # new-location penalty (cold start, A16).
         client.post("/transactions/", json=BASE_TX, headers=auth_headers)
-        # Register two more users on the same device to trigger shared-device rule
+        # Register three more users on the same device to trigger the shared-device rule
         client.post("/auth/register", json={"name": "U2", "email": "u2@test.com", "password": "p"})
         r2 = client.post("/auth/login", json={"email": "u2@test.com", "password": "p"})
         h2 = {"Authorization": f"Bearer {r2.json()['access_token']}"}
@@ -87,6 +99,11 @@ class TestFraudRules:
         r3 = client.post("/auth/login", json={"email": "u3@test.com", "password": "p"})
         h3 = {"Authorization": f"Bearer {r3.json()['access_token']}"}
         client.post("/transactions/", json={**BASE_TX, "device_id": "shared-dev"}, headers=h3)
+
+        client.post("/auth/register", json={"name": "U4", "email": "u4@test.com", "password": "p"})
+        r4 = client.post("/auth/login", json={"email": "u4@test.com", "password": "p"})
+        h4 = {"Authorization": f"Bearer {r4.json()['access_token']}"}
+        client.post("/transactions/", json={**BASE_TX, "device_id": "shared-dev"}, headers=h4)
 
         # Now the original user posts a high-amount tx on the same device
         resp = client.post("/transactions/", json={

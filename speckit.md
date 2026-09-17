@@ -70,16 +70,19 @@ POST /transactions/
   Load user's transaction history
         |
         v
-  calculate_risk()  --  app/fraud_detection.py   (features from app/features.py, T-01)
-  |-- Rule 1: amount > 5000                     +0.4
-  |-- Rule 2: amount > 3x user's average        +0.4
-  |-- Rule 3: location never seen for this user +0.2
-  |-- Rule 4: device shared by 3+ users         +0.3
-  |-- Rule 5: 5+ transactions in last 120s      +0.5
-  +-- Rule 6: ML fraud probability              +0.3 max
+  compute_features()  --  app/features.py   (single feature path, T-01)
         |
         v
-  risk_score = min(sum, 1.0)
+  evaluate_rules()  --  app/scoring.py       (T-03)
+  |-- R1_HIGH_AMOUNT      : amount > 5000                     0.25
+  |-- R2_AMOUNT_DEVIATION : amount > 3x user's average        0.25
+  |-- R3_NEW_LOCATION     : location never seen for this user 0.20
+  |-- R4_FLAGGED_DEVICE   : device shared by 3+ users         0.30
+  +-- R5_VELOCITY         : 5+ transactions in last 120s      0.50
+        |
+        v
+  rule_score = fired weight / 1.5          (normalised to [0, 1])
+  risk_score = 0.7 * rule_score + 0.3 * model_probability
         |
         |-- < 0.3   ->  LOW     ->  ALLOW
         |-- < 0.7   ->  MEDIUM  ->  MANUAL_CHECK
@@ -94,7 +97,7 @@ POST /transactions/
 | Routing | `app/routers/` | HTTP concerns only — validation, status codes, auth dependency |
 | Business logic | `app/services/fraud_services.py` | Risk banding, decision mapping, device fraud, claim verification |
 | Features | `app/features.py` | Single pure feature computation path shared by serving and training |
-| Scoring engine | `app/fraud_detection.py` | Rule evaluation and score aggregation |
+| Scoring engine | `app/scoring.py`, `app/fraud_detection.py` | Rule evaluation, score aggregation, `ScoreBreakdown` |
 | Inference | `app/ML/models.py` | Loads `model.pkl`, returns `(prediction, probability)` |
 | Persistence | `app/models.py`, `app/database.py` | ORM entities, engine and session |
 | Auth | `app/auth.py`, `app/dependencies.py` | JWT issue/decode, bcrypt hashing, `get_current_user` |
@@ -187,8 +190,8 @@ These are defects in existing code, not missing features.
 | A2 | **Temporal leakage.** Features are built in temporal order, then split with `train_test_split(random_state=42)`. A random split on time-ordered data trains on the future to predict the past. Needs a chronological cutoff. | `scripts/retrain.py` |
 | A3 | **Polluted ground truth.** REJECTED claim is read as "actually legitimate", but claims are rejected for staleness and serial claiming — neither is a fraud judgement. | `scripts/monitor.py` |
 | A4 | **Prediction used as label.** `is_fraud` is derived from `risk_level == "HIGH"`, then consumed downstream as truth. A model's own output must never become its training label. | `app/routers/transactions.py:36` |
-| A5 | **Score saturation.** Rule weights sum to 1.8 against a cap of 1.0. Any transaction firing 3+ rules reaches 1.0 before the ML boost is added, so the model's contribution is silently discarded in exactly the cases that matter most. | `app/fraud_detection.py` |
-| A6 | **Correlated rules double-count.** Rules 1 and 2 (high amount, high deviation) almost always fire together, producing 0.8 and an instant REJECT. A false-positive generator. | `app/fraud_detection.py` |
+| ~~A5~~ | ~~**Score saturation.** Rule weights sum to 1.8 against a cap of 1.0. Any transaction firing 3+ rules reaches 1.0 before the ML boost is added, so the model's contribution is silently discarded in exactly the cases that matter most.~~ **Resolved by T-03.** | `app/fraud_detection.py` |
+| ~~A6~~ | ~~**Correlated rules double-count.** Rules 1 and 2 (high amount, high deviation) almost always fire together, producing 0.8 and an instant REJECT. A false-positive generator.~~ **Resolved by T-03.** | `app/fraud_detection.py` |
 | A7 | **Unbounded history load.** Scoring calls `.all()` on the user's entire transaction history and iterates it in Python — O(n) latency and memory per request. | `app/routers/transactions.py:22` |
 | ~~A8~~ | ~~**Feature logic triplicated.** Computed independently in `fraud_detection.py`, `retrain.py:build_features`, and `train_model.py`. Guaranteed train/serve skew.~~ **Resolved by T-01.** | three files |
 | A9 | **Model has no real signal.** Trained on 20 hand-written rows that are perfectly separable on amount alone (legit <= 400, fraud >= 5000), fit on 100% of the data with no holdout. | `app/ML/train_model.py` |
@@ -593,7 +596,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 99 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 132 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -798,12 +801,12 @@ def combine(rule_hits: list[RuleHit], model_probability: float) -> float:
 
 **Acceptance**
 
-- [ ] `final_score` is provably in `[0, 1]` without a `min()` clamp
-- [ ] The model contribution is never discarded, at any rule-hit count
-- [ ] Rules 1 and 2 either merged or explicitly re-weighted to stop double-counting — decision documented in a comment
-- [ ] `ScoreBreakdown` returned from the scoring path, not just a float
-- [ ] Unit tests: all rules firing, no rules firing, each rule individually, exact threshold boundaries
-- [ ] A test asserting the score stays in range for 10,000 randomised feature vectors
+- [x] `final_score` is provably in `[0, 1]` without a `min()` clamp
+- [x] The model contribution is never discarded, at any rule-hit count
+- [x] Rules 1 and 2 either merged or explicitly re-weighted to stop double-counting — decision documented in a comment
+- [x] `ScoreBreakdown` returned from the scoring path, not just a float
+- [x] Unit tests: all rules firing, no rules firing, each rule individually, exact threshold boundaries
+- [x] A test asserting the score stays in range for 10,000 randomised feature vectors
 
 ---
 

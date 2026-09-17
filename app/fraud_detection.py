@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from .features import FeatureVector, aggregates_from_history, compute_features
+from .scoring import ScoreBreakdown, score
 from .services.fraud_services import count_device_users
-from .ML.models import predict_fraud
+from .ML.models import MODEL_VERSION, predict_fraud
 
 
 def build_feature_vector(db, transaction, user_transactions, now: datetime) -> FeatureVector:
@@ -15,31 +16,9 @@ def build_feature_vector(db, transaction, user_transactions, now: datetime) -> F
     )
 
 
-def calculate_risk(db, transaction, user_transactions):
+def score_transaction(db, transaction, user_transactions) -> ScoreBreakdown:
+    """Score a transaction and return the full breakdown behind the number."""
     fv = build_feature_vector(db, transaction, user_transactions, datetime.now(timezone.utc))
-    risk_score = 0.0
-
-    # Rule 1: Absolute high-amount threshold
-    if fv.amount > 5000:
-        risk_score += 0.4
-
-    # Rule 2: Amount far above the user's own average
-    if fv.amount_deviation > 3:
-        risk_score += 0.4
-
-    # Rule 3: Transaction from a location the user has never used
-    if fv.is_new_location:
-        risk_score += 0.2
-
-    # Rule 4: Device shared by 3+ distinct users
-    if fv.is_flagged_device:
-        risk_score += 0.3
-
-    # Rule 5: Rapid transaction velocity — 5+ transactions in the last 2 minutes
-    if fv.velocity_2m >= 5:
-        risk_score += 0.5
-
-    # Rule 6: ML model boost
     _, probability = predict_fraud(
         amount=fv.amount,
         amount_deviation=fv.amount_deviation,
@@ -47,6 +26,9 @@ def calculate_risk(db, transaction, user_transactions):
         is_flagged_device=fv.is_flagged_device,
         velocity=fv.velocity_2m,
     )
-    risk_score += probability * 0.3
+    return score(fv, probability, MODEL_VERSION)
 
-    return min(risk_score, 1.0)
+
+def calculate_risk(db, transaction, user_transactions) -> float:
+    """Final risk score in [0, 1]. Callers needing the rule trace use score_transaction."""
+    return score_transaction(db, transaction, user_transactions).final_score

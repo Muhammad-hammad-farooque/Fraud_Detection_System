@@ -5,6 +5,10 @@ import os
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.pkl")
 model = joblib.load(MODEL_PATH)
 
+# Placeholder until the model registry lands (T-13): model.pkl carries no
+# version, training date or metrics of its own.
+MODEL_VERSION = "rf-baseline-unversioned"
+
 def predict_fraud(amount: float, amount_deviation: float, is_new_location: int,
                   is_flagged_device: int, velocity: int):
     """
