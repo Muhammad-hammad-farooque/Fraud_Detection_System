@@ -167,7 +167,7 @@ Warns if recall drops below 80% or FPR exceeds 10%. Logs to `logs/monitor_YYYY-M
 
 ### 3.5 Testing
 
-76 tests across 5 modules, run against SQLite so no PostgreSQL is needed. `conftest.py`
+227 tests across 12 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -207,7 +207,7 @@ These are defects in existing code, not missing features.
 | ~~A14~~ | ~~**Claim amount unvalidated server-side.** The backend accepts any amount regardless of the transaction's value; only the frontend enforces a maximum.~~ **Resolved by T-08.** | `app/routers/claims.py` |
 | A15 | **No idempotency.** A retried POST creates a duplicate transaction and falsely inflates the velocity rule. | `app/routers/transactions.py` |
 | ~~A16~~ | ~~**No cold-start handling.** A user's first transaction always has empty known locations, so `is_new_location` fires for every new customer.~~ **Resolved by T-01.** | `app/fraud_detection.py` |
-| A17 | **Test DB is file-based, not in-memory** as the docstring and README both claim. File-based SQLite can leak state between runs. | `tests/conftest.py` |
+| ~~A17~~ | ~~**Test DB is file-based, not in-memory** as the docstring and README both claim. File-based SQLite can leak state between runs.~~ **Resolved by T-09.** | `tests/conftest.py` |
 | A18 | **`networkx` declared but never imported.** Dead dependency. **Kept deliberately: T-17 uses it for graph features.** | `pyproject.toml` |
 
 ---
@@ -601,7 +601,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 208 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 227 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -999,12 +999,12 @@ engine = create_engine(
 
 **Acceptance**
 
-- [ ] No `test.db` file created by the suite
-- [ ] `StaticPool` used — without it, in-memory SQLite gives every connection its own database
-- [ ] README and the conftest docstring now match reality
-- [ ] `calculate_risk` directly unit-tested: each rule alone, all rules together, boundary values
-- [ ] Monotonicity test: raising `amount` with all else fixed must never lower the score
-- [ ] Coverage measured and reported
+- [x] No `test.db` file created by the suite
+- [x] `StaticPool` used — without it, in-memory SQLite gives every connection its own database
+- [x] README and the conftest docstring now match reality
+- [x] `calculate_risk` directly unit-tested: each rule alone, all rules together, boundary values
+- [x] Monotonicity test: raising `amount` with all else fixed must never lower the score
+- [x] Coverage measured and reported
 
 ---
 

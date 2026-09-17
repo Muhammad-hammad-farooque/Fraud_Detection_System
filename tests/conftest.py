@@ -1,25 +1,33 @@
 """
 Shared fixtures for all test modules.
-Uses an in-memory SQLite database so no real PostgreSQL is needed.
+
+Uses a genuinely in-memory SQLite database - StaticPool is required, because
+without it every connection gets its own empty database and the tables created
+on one are invisible to the next. The suite leaves no test.db file behind.
 """
 import os
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 # Set required env vars BEFORE importing anything from app
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only")
 os.environ.setdefault("ALGORITHM", "HS256")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 from app.database import Base
 from app.main import app
 from app.dependencies import get_db
 
-SQLITE_URL = "sqlite:///./test.db"
-engine = create_engine(SQLITE_URL, connect_args={"check_same_thread": False})
+SQLITE_URL = "sqlite:///:memory:"
+engine = create_engine(
+    SQLITE_URL,
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,      # required, or each connection gets a fresh empty DB
+)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

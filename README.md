@@ -76,7 +76,7 @@ fraud-detection-system/
 │       ├── transactions.py      # Submit and view transactions
 │       └── claims.py            # File and track claims
 ├── tests/
-│   ├── conftest.py              # Shared fixtures (in-memory SQLite, test client)
+│   ├── conftest.py              # Shared fixtures (in-memory SQLite + StaticPool, test client)
 │   ├── test_auth.py             # Auth endpoint tests
 │   ├── test_transactions.py     # Transaction endpoint + fraud rule tests
 │   ├── test_claims.py           # Claims endpoint + verification logic tests
@@ -285,7 +285,7 @@ Reports are logged to `logs/monitor_YYYY-MM-DD.log` and include:
 
 ```bash
 # Install test dependencies
-pip install pytest httpx
+pip install pytest httpx pytest-cov
 
 # Run all tests
 pytest
@@ -297,7 +297,14 @@ pytest -v
 pytest tests/test_auth.py -v
 ```
 
-Tests use an in-memory SQLite database — no PostgreSQL required to run the suite.
+Tests use a genuinely in-memory SQLite database (StaticPool, no file on disk) — no PostgreSQL
+required to run the suite, and no `test.db` left behind.
+
+Coverage:
+
+```bash
+pytest --cov=app --cov-report=term-missing
+```
 
 **76 tests across 5 modules — all passing.**
 
