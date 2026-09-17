@@ -23,6 +23,7 @@ class Transaction(Base):
     risk_score = Column(Float, default=0.0)
     risk_level = Column(String, default="LOW")
     decision = Column(String, default="ALLOW")
+    policy_version = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Every scoring query filters on exactly this pair.

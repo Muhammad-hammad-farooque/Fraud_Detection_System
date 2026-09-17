@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas
-from ..fraud_detection import calculate_risk
+from ..fraud_detection import score_transaction
 from ..dependencies import get_db, get_current_user
-from ..services.fraud_services import get_risk_level, get_decision
+from ..policy import Decision, PolicyContext, decide, load_policy_config
+from ..services.fraud_services import get_risk_level
 
 router = APIRouter(
     prefix="/transactions",
@@ -18,10 +19,12 @@ def create_transaction(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    risk_score = calculate_risk(db, transaction, current_user.id)
+    breakdown  = score_transaction(db, transaction, current_user.id)
+    risk_score = breakdown.final_score
     risk_level = get_risk_level(risk_score)
-    decision   = get_decision(risk_level)
-    is_fraud   = risk_level == "HIGH"
+    policy     = load_policy_config()
+    decision   = decide(risk_score, PolicyContext(amount=transaction.amount), policy)
+    is_fraud   = decision == Decision.REJECT
 
     new_transaction = models.Transaction(
         user_id=current_user.id,
@@ -31,7 +34,8 @@ def create_transaction(
         is_fraud=is_fraud,
         risk_score=risk_score,
         risk_level=risk_level,
-        decision=decision,
+        decision=decision.value,
+        policy_version=policy.version,
     )
 
     db.add(new_transaction)

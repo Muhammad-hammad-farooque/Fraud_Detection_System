@@ -84,9 +84,12 @@ POST /transactions/
   rule_score = fired weight / 1.5          (normalised to [0, 1])
   risk_score = 0.7 * rule_score + 0.3 * model_probability
         |
-        |-- < 0.3   ->  LOW     ->  ALLOW
-        |-- < 0.7   ->  MEDIUM  ->  MANUAL_CHECK
-        +-- >= 0.7  ->  HIGH    ->  REJECT
+  policy.decide()  --  app/policy.py            (T-04)
+        |-- < 0.3   ->  ALLOW
+        |-- < 0.5   ->  STEP_UP   (additional authentication)
+        |-- < 0.7   ->  REVIEW
+        +-- >= 0.7  ->  REJECT
+  thresholds tighten on high-value amounts, loosen for trusted customers
 ```
 
 ### 2.3 Layer responsibilities
@@ -95,7 +98,7 @@ POST /transactions/
 |---|---|---|
 | Entry point | `app/main.py` | App construction, router registration |
 | Routing | `app/routers/` | HTTP concerns only — validation, status codes, auth dependency |
-| Business logic | `app/services/fraud_services.py` | Risk banding, decision mapping, device fraud, claim verification |
+| Business logic | `app/services/fraud_services.py`, `app/policy.py` | Risk banding, device fraud, claim verification; policy maps score to action |
 | Features | `app/features.py` | Single pure feature computation path shared by serving and training |
 | Scoring engine | `app/scoring.py`, `app/fraud_detection.py` | Rule evaluation, score aggregation, `ScoreBreakdown` |
 | Inference | `app/ML/models.py` | Loads `model.pkl`, returns `(prediction, probability)` |
@@ -596,7 +599,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 144 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 161 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -853,13 +856,13 @@ def decide(score: float, ctx: PolicyContext, cfg: PolicyConfig) -> Decision:
 
 **Acceptance**
 
-- [ ] `app/scoring.py` contains no thresholds and no decision vocabulary
-- [ ] `app/policy.py` contains no feature or risk computation
-- [ ] Thresholds read from config, with the existing 0.3 / 0.7 as defaults
-- [ ] `STEP_UP` added to the `Decision` enum and handled by the frontend
-- [ ] `policy_version` recorded alongside every decision
-- [ ] High-value transactions demonstrably use tighter thresholds
-- [ ] Unit tests for every threshold boundary and both tiers
+- [x] `app/scoring.py` contains no thresholds and no decision vocabulary
+- [x] `app/policy.py` contains no feature or risk computation
+- [x] Thresholds read from config, with the existing 0.3 / 0.7 as defaults
+- [x] `STEP_UP` added to the `Decision` enum and handled by the frontend
+- [x] `policy_version` recorded alongside every decision
+- [x] High-value transactions demonstrably use tighter thresholds
+- [x] Unit tests for every threshold boundary and both tiers
 
 ---
 

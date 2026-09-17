@@ -4,20 +4,13 @@ from ..features import FLAGGED_DEVICE_MIN_USERS
 from ..repositories.transaction_repo import get_device_user_count
 
 def get_risk_level(risk_score: float) -> str:
+    """Coarse banding kept for reporting. The action itself comes from app/policy.py."""
     if risk_score < 0.3:
         return "LOW"
     elif risk_score < 0.7:
         return "MEDIUM"
     else:
         return "HIGH"
-
-def get_decision(risk_level: str) -> str:
-    if risk_level == "LOW":
-        return "ALLOW"
-    elif risk_level == "MEDIUM":
-        return "MANUAL_CHECK"
-    else:
-        return "REJECT"
 
 def detect_device_fraud(db, device_id: str) -> bool:
     """Returns True if the device has been used by 3 or more distinct users."""

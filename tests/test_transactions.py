@@ -41,7 +41,7 @@ class TestCreateTransaction:
 
     def test_decision_is_valid_value(self, client, auth_headers):
         resp = client.post("/transactions/", json=BASE_TX, headers=auth_headers)
-        assert resp.json()["decision"] in ("ALLOW", "MANUAL_CHECK", "REJECT")
+        assert resp.json()["decision"] in ("ALLOW", "STEP_UP", "REVIEW", "REJECT")
 
 
 class TestFraudRules:

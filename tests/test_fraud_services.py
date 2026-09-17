@@ -4,7 +4,7 @@ No HTTP layer — tests the business logic directly.
 """
 import pytest
 from unittest.mock import MagicMock, patch
-from app.services.fraud_services import get_risk_level, get_decision, detect_device_fraud, verify_claim
+from app.services.fraud_services import get_risk_level, detect_device_fraud, verify_claim
 from app.auth import hash_password, verify_password, create_access_token, decode_access_token
 
 
@@ -28,19 +28,6 @@ class TestGetRiskLevel:
     def test_above_0_7_is_high(self):
         assert get_risk_level(0.9) == "HIGH"
         assert get_risk_level(1.0) == "HIGH"
-
-
-# ── get_decision ─────────────────────────────────────────────────────────────
-
-class TestGetDecision:
-    def test_low_allows(self):
-        assert get_decision("LOW") == "ALLOW"
-
-    def test_medium_manual_check(self):
-        assert get_decision("MEDIUM") == "MANUAL_CHECK"
-
-    def test_high_rejects(self):
-        assert get_decision("HIGH") == "REJECT"
 
 
 # ── detect_device_fraud ───────────────────────────────────────────────────────

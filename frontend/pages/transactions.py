@@ -35,12 +35,14 @@ if submitted:
             decision = data["decision"]
             score = round(data["risk_score"], 3)
 
-            if risk == "HIGH":
-                st.error(f"Transaction REJECTED — High risk (score: {score}). Flagged as fraud.")
-            elif risk == "MEDIUM":
-                st.warning(f"Transaction requires MANUAL CHECK — Medium risk (score: {score}).")
+            if decision == "REJECT":
+                st.error(f"Transaction REJECTED — {risk} risk (score: {score}). Flagged as fraud.")
+            elif decision == "REVIEW":
+                st.warning(f"Transaction sent for REVIEW — {risk} risk (score: {score}).")
+            elif decision == "STEP_UP":
+                st.info(f"Additional verification required — {risk} risk (score: {score}).")
             else:
-                st.success(f"Transaction APPROVED — Low risk (score: {score}).")
+                st.success(f"Transaction APPROVED — {risk} risk (score: {score}).")
 
             col_a, col_b, col_c = st.columns(3)
             col_a.metric("Transaction ID", f"#{data['id']}")
@@ -76,7 +78,7 @@ col_f1, col_f2, col_f3 = st.columns(3)
 with col_f1:
     risk_filter = st.selectbox("Filter by Risk Level", ["All", "LOW", "MEDIUM", "HIGH"])
 with col_f2:
-    decision_filter = st.selectbox("Filter by Decision", ["All", "ALLOW", "MANUAL_CHECK", "REJECT"])
+    decision_filter = st.selectbox("Filter by Decision", ["All", "ALLOW", "STEP_UP", "REVIEW", "REJECT"])
 with col_f3:
     fraud_filter = st.selectbox("Show", ["All", "Fraud only", "Clean only"])
 
@@ -97,7 +99,12 @@ def color_risk(val):
     return colors.get(val, "")
 
 def color_decision(val):
-    colors = {"REJECT": "color: red", "MANUAL_CHECK": "color: orange", "ALLOW": "color: green"}
+    colors = {
+        "REJECT": "color: red",
+        "REVIEW": "color: orange",
+        "STEP_UP": "color: goldenrod",
+        "ALLOW": "color: green",
+    }
     return colors.get(val, "")
 
 display_cols = ["id", "amount", "location", "device_id", "risk_score", "risk_level", "decision", "is_fraud", "created_at"]

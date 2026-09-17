@@ -41,6 +41,7 @@ class TransactionResponse(BaseModel):
     risk_score: float
     risk_level: str
     decision: str
+    policy_version: str | None = None
     created_at: datetime
 
 # ── Claim ────────────────────────────────────────────────────────
