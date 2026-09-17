@@ -4,8 +4,9 @@
 |---|---|
 | **Project** | Fraud Detection System |
 | **Version** | 0.1.0 |
-| **Status** | Working prototype — not production ready |
-| **Last reviewed** | 2026-09-12 |
+| **Status** | Working prototype — not production ready. Phase A (correctness) complete. |
+| **Last reviewed** | 2026-09-18 |
+| **Progress** | 9 / 33 tasks · 14 / 18 defects fixed — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -46,6 +47,37 @@ nobody wrote a rule for. This is the standard architecture in payments risk.
 | Fraud analyst | Review the manual-check queue, confirm fraud, tune rules | **No — not implemented** |
 | Data scientist | Retrain, evaluate, monitor drift | Partially (scripts only) |
 | Auditor / regulator | Reconstruct why any decision was made | **No — not implemented** |
+
+### 1.4 Progress
+
+Phase A is complete. Each task below is one commit, with its defects struck through in §4.2
+and its acceptance boxes ticked in §12.
+
+| Task | Commit | Fixed |
+|---|---|---|
+| T-01 · Unified feature computation | `dfb0163` | A8, A16 |
+| T-02 · SQL aggregates | `d73c065` | A7 |
+| T-03 · Score saturation, rules split from policy | `309424e` | A5, A6 |
+| T-04 · Policy layer | `dc1bb11` | P1, P4 |
+| T-05 · Ground-truth outcomes | `aa35915` | A1, A4 |
+| T-06 · Chronological split and label maturity | `38d2968` | A2 |
+| T-07 · Monitoring ground truth | `935151b` | A3 |
+| T-08 · Correctness fix bundle | `2fedbef` | A10, A11, A12, A14 |
+| T-09 · Test infrastructure and rule coverage | `5cff5f0` | A17 |
+
+**Suite:** 227 tests, 98% coverage of `app/`.
+
+**Still open from Phase A's reach:** A9 (weak training data, T-18), A13 (dead review states,
+T-12), A15 (no idempotency, T-14), A18 (`networkx` unused — kept deliberately, T-17 uses it).
+
+**Next, with nothing blocking:** T-10 (RBAC) and T-14 (idempotency). T-12 is the task that
+starts writing the `TransactionOutcome` rows T-05 created, which is what makes retraining
+possible at all — until then `retrain.py` correctly exits with no labels to learn from.
+
+**Carried debt, not yet a task:** T-04 and T-05 changed the schema while `create_all()` is
+still the only deployment path, so `migrations/001_phase_a_schema.sql` holds the equivalent
+DDL for databases created before Phase A. T-21 must baseline that file when it brings in
+Alembic. Any Phase B task that adds a column has the same problem and should extend that file.
 
 ---
 
@@ -133,8 +165,9 @@ endpoint is scoped to `current_user.id`, so users cannot read each other's recor
 
 ### 3.2 Prediction engine
 
-Five heuristics plus a `RandomForestClassifier` boost. The model consumes exactly five
-features, which must match `train_model.py` positionally:
+Five weighted rules blended with a `RandomForestClassifier` probability (§2.2). Features are
+computed once in `app/features.py` and passed to the model as a named DataFrame, so the
+training and serving paths cannot drift apart:
 
 | Feature | Meaning |
 |---|---|
@@ -157,13 +190,19 @@ Step 3 — Pattern match   : non-fraud txn AND first ever claim -> APPROVED
 
 ### 3.4 MLOps scripts
 
-**`scripts/retrain.py`** — champion/challenger retraining. Loads labelled transactions,
-rebuilds features in temporal order, trains a challenger, compares AUC-ROC against the
-deployed model, and replaces `model.pkl` only if the challenger wins. Logs to `logs/retrain.log`.
+**`scripts/retrain.py`** — champion/challenger retraining. Loads confirmed outcomes only,
+drops labels younger than 90 days, rebuilds features through `app/features.py`, splits
+chronologically, trains a challenger, compares AUC-ROC against the deployed model, and
+replaces `model.pkl` only if the challenger wins. Logs to `logs/retrain.log`.
 
-**`scripts/monitor.py`** — performance monitoring over a rolling window. Reports confusion
-matrix, precision, recall, F1, false positive rate, and volume by decision and risk level.
-Warns if recall drops below 80% or FPR exceeds 10%. Logs to `logs/monitor_YYYY-MM-DD.log`.
+**`scripts/monitor.py`** — performance monitoring over a rolling window. Reports labelled
+coverage, confusion matrix, precision, recall, F1, false positive rate, the business metrics
+from §10.5, and volume by decision and risk level. Detection metrics are suppressed below 20
+confirmed outcomes. Warns if recall drops below 80% or FPR exceeds 10%.
+Logs to `logs/monitor_YYYY-MM-DD.log`.
+
+Neither script can do anything useful until something writes `TransactionOutcome` rows,
+which is T-12.
 
 ### 3.5 Testing
 
@@ -182,7 +221,10 @@ for a registered user, auth headers, and a second user for cross-tenant isolatio
 - Pydantic v2 contracts on every request and response
 - Genuine MLOps thinking — champion/challenger gating and performance monitoring are
   well beyond what a project this size usually has
-- 76 tests including cross-tenant isolation cases
+- 227 tests including cross-tenant isolation cases, at 98% coverage of `app/`
+- One feature computation path shared by serving and training, pinned by a parity test
+- Scoring is bounded: three SQL statements per decision regardless of history size
+- Policy separated from scoring, with the score provably in [0, 1] without clamping
 - Full Docker Compose stack (API + Postgres + frontend)
 
 ### 4.2 What is broken
@@ -203,7 +245,7 @@ These are defects in existing code, not missing features.
 | A10 | **Uncalibrated probabilities used arithmetically.** RandomForest `predict_proba` is poorly calibrated, yet is multiplied by 0.3 and summed into the score as if it were a true probability. | `app/fraud_detection.py` |
 | ~~A11~~ | ~~**Feature-name mismatch.** A bare numpy array is passed to a model fitted on a DataFrame — emits a warning and relies silently on positional order.~~ **Resolved by T-08.** | `app/ML/models.py:15` |
 | ~~A12~~ | ~~**Naive datetime columns.** `Column(DateTime)` without `timezone=True`, forcing scattered `.replace(tzinfo=utc)` patches at every use site.~~ **Resolved by T-08.** | `app/models.py` |
-| A13 | **Dead decision states.** `MANUAL_CHECK` and `MANUAL_REVIEW` are terminal — no code path can resolve them. | system-wide |
+| A13 | **Dead decision states.** `REVIEW`, `STEP_UP` (both since T-04) and `MANUAL_REVIEW` are terminal — no code path can resolve them. | system-wide |
 | ~~A14~~ | ~~**Claim amount unvalidated server-side.** The backend accepts any amount regardless of the transaction's value; only the frontend enforces a maximum.~~ **Resolved by T-08.** | `app/routers/claims.py` |
 | A15 | **No idempotency.** A retried POST creates a duplicate transaction and falsely inflates the velocity rule. | `app/routers/transactions.py` |
 | ~~A16~~ | ~~**No cold-start handling.** A user's first transaction always has empty known locations, so `is_new_location` fires for every new customer.~~ **Resolved by T-01.** | `app/fraud_detection.py` |
@@ -268,9 +310,9 @@ because the columns do not exist. Add: `merchant_id`, `merchant_category`, `curr
 
 | Change | Impact |
 |---|---|
-| Replace the unbounded `.all()` with SQL aggregates (`AVG`, `COUNT`, `EXISTS`) | Removes the O(n) scoring path — the system's hardest scalability limit |
+| ~~Replace the unbounded `.all()` with SQL aggregates (`AVG`, `COUNT`, `EXISTS`)~~ **Done, T-02** | Removes the O(n) scoring path — the system's hardest scalability limit |
 | Redis counters for velocity windows | Sub-millisecond velocity lookups instead of scanning history |
-| Composite index on `(user_id, created_at)` | Every history query filters on exactly this pair |
+| ~~Composite index on `(user_id, created_at)`~~ **Done, T-02** | Every history query filters on exactly this pair |
 | Async endpoints | Handlers are sync `def`, so each blocks a threadpool worker during DB I/O |
 | Connection pool tuning (`pool_size`, `max_overflow`, `pool_pre_ping`) | The engine currently uses defaults |
 | Pagination on list endpoints | `GET /transactions/` and `GET /claims/` are unbounded |
@@ -381,18 +423,18 @@ it trains on its own predictions.
 
 ## 7. Execution plan
 
-### Phase 1 — Correctness (blocks everything else)
+### Phase 1 — Correctness (blocks everything else) — **COMPLETE**
 
-1. Extract `app/features.py` as the single feature computation path — fixes A8
-2. Add the `TransactionOutcome` table and decouple labels from claims — fixes A1 and A4
-3. Chronological train/test split in `retrain.py` — fixes A2
-4. Correct the ground-truth mapping in `monitor.py` — fixes A3
-5. Fix score saturation: normalise weights or drop additive scoring — fixes A5 and A6
-6. Replace the unbounded `.all()` with SQL aggregates — fixes A7
-7. Pass a DataFrame to `predict_fraud` — fixes A11
-8. Timezone-aware datetime columns — fixes A12
-9. Server-side claim amount validation — fixes A14
-10. True in-memory test DB — fixes A17
+1. ~~Extract `app/features.py` as the single feature computation path — fixes A8~~ T-01
+2. ~~Add the `TransactionOutcome` table and decouple labels from claims — fixes A1 and A4~~ T-05
+3. ~~Chronological train/test split in `retrain.py` — fixes A2~~ T-06
+4. ~~Correct the ground-truth mapping in `monitor.py` — fixes A3~~ T-07
+5. ~~Fix score saturation: normalise weights or drop additive scoring — fixes A5 and A6~~ T-03
+6. ~~Replace the unbounded `.all()` with SQL aggregates — fixes A7~~ T-02
+7. ~~Pass a DataFrame to `predict_fraud` — fixes A11~~ T-08
+8. ~~Timezone-aware datetime columns — fixes A12~~ T-08
+9. ~~Server-side claim amount validation — fixes A14~~ T-08
+10. ~~True in-memory test DB — fixes A17~~ T-09
 
 ### Phase 2 — Make it a fraud *system*
 
@@ -438,10 +480,10 @@ it trains on its own predictions.
 | Features in the model | 5 | 60+ |
 | Training samples | 20 synthetic | 50k+ realistic, imbalanced |
 | Class balance | 50 / 50 | ~0.5% fraud |
-| Scoring latency p99 | unmeasured, O(n) in history | < 100 ms, O(1) |
+| Scoring latency p99 | unmeasured, but O(1) in history since T-02 | < 100 ms, O(1) |
 | Recall at fixed 1% FPR | unmeasured | > 70% |
-| Label source | own predictions (circular) | analyst confirmations + chargebacks |
-| Decision auditability | none | full feature vector and rule trace per decision |
+| Label source | `TransactionOutcome` only, but nothing writes to it until T-12 | analyst confirmations + chargebacks |
+| Decision auditability | `ScoreBreakdown` carries the trace, nothing persists it until T-11 | full feature vector and rule trace per decision |
 | Manual review resolution | impossible | analyst queue with SLA |
 | Deployment | `create_all()` on boot | Alembic migrations via CI |
 
@@ -451,12 +493,15 @@ it trains on its own predictions.
 
 If only a handful of changes are made, these carry the most signal:
 
-1. **`features.py`** — a single computation path, eliminating train/serve skew
-2. **`TransactionOutcome`** — breaks the circular labelling that makes the ML loop meaningless
-3. **Fix score saturation** — the ML contribution is currently discarded when it matters most
-4. **SQL aggregates instead of `.all()`** — removes the hardest scalability limit
-5. **Decision audit trail** — the clearest signal of regulated-fintech experience
-6. **Graph features with `networkx`** — the most technically impressive addition available
+1. ~~**`features.py`** — a single computation path, eliminating train/serve skew~~ **Done, T-01**
+2. ~~**`TransactionOutcome`** — breaks the circular labelling that makes the ML loop meaningless~~ **Done, T-05**
+3. ~~**Fix score saturation** — the ML contribution is discarded when it matters most~~ **Done, T-03**
+4. ~~**SQL aggregates instead of `.all()`** — removes the hardest scalability limit~~ **Done, T-02**
+5. **Decision audit trail** (T-11) — the clearest signal of regulated-fintech experience
+6. **Graph features with `networkx`** (T-17) — the most technically impressive addition available
+
+The two that remain are the highest-leverage work left, together with **T-12**, which turns
+the table T-05 created into an actual supply of labels.
 
 ---
 
@@ -576,12 +621,12 @@ Not F1. The operating metrics are:
 | Industry practice | This project today | Task |
 |---|---|---|
 | GBDT primary scorer | Degenerate RandomForest depth-1 stumps | T-19 |
-| Feature store, one code path | Features computed in three places | T-01 |
-| Streaming velocity counters | In-Python scan of full history | T-02 |
-| Policy layer separate from model | Thresholds fused into the scorer | T-04 |
+| Feature store, one code path | ~~Features computed in three places~~ one path, `app/features.py` | ~~T-01~~ ✅ |
+| Streaming velocity counters | ~~In-Python scan of full history~~ bounded SQL; Redis still T-33 | ~~T-02~~ ✅ |
+| Policy layer separate from model | ~~Thresholds fused into the scorer~~ `app/policy.py` | ~~T-04~~ ✅ |
 | Calibrated probability | Raw uncalibrated `predict_proba` | T-19 |
-| Step-up auth as a third action | Allow / review / reject only | T-04 |
-| Chargeback and analyst labels | Model's own output used as label | T-05 |
+| Step-up auth as a third action | ~~Allow / review / reject only~~ STEP_UP shipped | ~~T-04~~ ✅ |
+| Chargeback and analyst labels | ~~Model's own output used as label~~ `TransactionOutcome`, unwritten until T-12 | ~~T-05~~ ✅ |
 | Full decision audit log | Nothing logged | T-11 |
 | Graph and ring features | 1-hop device degree only | T-17 |
 | Multi-window velocity | Single 120-second window | T-16 |
@@ -608,6 +653,32 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 6. **Update this file.** Tick the acceptance boxes and mark the defect resolved in §4.2.
 7. **Never delete a defect row** in §4.2 — strike it through and note the fixing task.
 
+### 11.2b Conventions settled during Phase A
+
+Decisions made while executing Phase A that later tasks must not silently undo.
+
+1. **`compute_features` stays pure.** No database, no clock, no I/O. Aggregates are built by
+   the caller: `transaction_repo.get_user_aggregates` when serving, `aggregates_from_history`
+   when training. T-16 adds features to the same function, never around it.
+2. **Rule weights are normalised, never clamped.** `final_score` is in [0, 1] because
+   `W_RULES + W_MODEL == 1.0`, not because of a `min()`. Adding a rule changes
+   `TOTAL_RULE_WEIGHT` and therefore rescales every existing score — retune the policy
+   thresholds in the same task, and say so.
+3. **Rules are named.** Every rule carries a stable `id` such as `R4_FLAGGED_DEVICE`, because
+   the audit trail in T-11 stores those ids. Renaming one is a schema change to the audit log.
+4. **Scoring never names an action.** `app/scoring.py` must not contain ALLOW, REVIEW,
+   STEP_UP, REJECT or a threshold; `app/policy.py` must not compute a feature. A test in
+   `tests/test_policy.py` enforces both directions.
+5. **A prediction is never a label.** `Transaction.predicted_fraud` is model output.
+   Training and monitoring read `TransactionOutcome` and nothing else.
+6. **One timezone helper.** `features.as_utc` is the single place that normalises a stored
+   timestamp, because SQLite returns naive datetimes whatever the column type. Do not
+   reintroduce `.replace(tzinfo=utc)` at call sites.
+7. **The test suite is in-memory.** `StaticPool` is required; without it each connection gets
+   its own empty database. No test may write a file to the repository.
+8. **Schema changes need a hand-written migration** in `migrations/` until T-21, because
+   `create_all()` cannot alter an existing table.
+
 ### 11.3 Definition of done
 
 - [ ] Code implements the stated contract
@@ -615,7 +686,10 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 - [ ] `pytest` passes with no new warnings
 - [ ] Type hints on every new public function
 - [ ] Docstrings on every new module and public function
-- [ ] Acceptance boxes in this document ticked
+- [ ] Acceptance boxes in this document ticked, and §1.4 updated with the commit
+- [ ] Behaviour changes that force an existing test to be rewritten are called out in the
+      commit message, with the reason stated in the test itself
+- [ ] Unrelated working-tree changes stay out of the commit
 - [ ] Committed with the task ID in the message, e.g. `T-01: unified feature computation`
 
 ### 11.4 Commit message format
@@ -638,7 +712,7 @@ worth doing first, because later phases amplify whatever is wrong here.
 
 ---
 
-#### T-01 · Unified feature computation
+#### T-01 · Unified feature computation — ✅ DONE (`dfb0163`)
 
 **Depends on:** none
 **Fixes:** A8, A16
@@ -717,7 +791,7 @@ def compute_features(
 
 ---
 
-#### T-02 · Replace history scan with SQL aggregates
+#### T-02 · Replace history scan with SQL aggregates — ✅ DONE (`d73c065`)
 
 **Depends on:** T-01
 **Fixes:** A7
@@ -754,7 +828,7 @@ def get_device_user_count(db: Session, device_id: str) -> int:
 
 ---
 
-#### T-03 · Fix score saturation and separate rules from policy
+#### T-03 · Fix score saturation and separate rules from policy — ✅ DONE (`309424e`)
 
 **Depends on:** T-01
 **Fixes:** A5, A6
@@ -815,7 +889,7 @@ def combine(rule_hits: list[RuleHit], model_probability: float) -> float:
 
 ---
 
-#### T-04 · Policy layer
+#### T-04 · Policy layer — ✅ DONE (`dc1bb11`)
 
 **Depends on:** T-03
 **Fixes:** design principle P1, P4
@@ -868,7 +942,7 @@ def decide(score: float, ctx: PolicyContext, cfg: PolicyConfig) -> Decision:
 
 ---
 
-#### T-05 · Ground-truth outcomes, decoupled from claims
+#### T-05 · Ground-truth outcomes, decoupled from claims — ✅ DONE (`aa35915`)
 
 **Depends on:** none
 **Fixes:** A1, A4
@@ -909,7 +983,7 @@ class TransactionOutcome(Base):
 
 ---
 
-#### T-06 · Chronological split and label maturity
+#### T-06 · Chronological split and label maturity — ✅ DONE (`38d2968`)
 
 **Depends on:** T-05
 **Fixes:** A2
@@ -941,7 +1015,7 @@ def apply_label_maturity(df: pd.DataFrame, maturity_days: int = 90) -> pd.DataFr
 
 ---
 
-#### T-07 · Correct the monitoring ground truth
+#### T-07 · Correct the monitoring ground truth — ✅ DONE (`935151b`)
 
 **Depends on:** T-05
 **Fixes:** A3
@@ -960,7 +1034,7 @@ staleness and serial claiming — neither is a statement about fraud.
 
 ---
 
-#### T-08 · Correctness fix bundle
+#### T-08 · Correctness fix bundle — ✅ DONE (`2fedbef`)
 
 **Depends on:** T-01
 **Fixes:** A10, A11, A12, A14, A18
@@ -979,7 +1053,7 @@ Small independent fixes, grouped because each is a few lines.
 
 ---
 
-#### T-09 · Test infrastructure and rule coverage
+#### T-09 · Test infrastructure and rule coverage — ✅ DONE (`5cff5f0`)
 
 **Depends on:** T-03
 **Fixes:** A17
@@ -1089,7 +1163,7 @@ the queue. Without this the system can never learn.
 ```
 GET   /v1/analyst/cases                 list queue, filter by status/priority, paginated
 POST  /v1/analyst/cases/{id}/assign     claim a case
-POST  /v1/analyst/cases/{id}/resolve    body: {is_fraud: bool, notes: str}
+POST  /v1/analyst/cases/{id}/resolve    body: {is_fraud_confirmed: bool, notes: str}
                                         -> writes a TransactionOutcome with source=ANALYST
                                         -> transitions the case to RESOLVED
 ```
@@ -1346,22 +1420,27 @@ Lower risk, largely mechanical. Conspicuous by their absence in review.
 Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
 
 ```
-T-01 features.py ──┬── T-02 SQL aggregates
-                   ├── T-03 scoring ──┬── T-04 policy ──┐
-                   │                  ├── T-09 tests    │
-                   │                  └── T-13 registry │
-                   └── T-08 fix bundle ── T-15 schema ──┼── T-16 features+
-                                                        │   └── T-18 data ── T-19 LightGBM
-                                                        │   └── T-20 anomaly
-                                                        └── T-17 graph
-T-05 outcomes ──┬── T-06 chronological split
-                ├── T-07 monitor fix
-                └── T-12 case queue
-T-10 RBAC ──────────┘
-T-03 + T-04 ── T-11 audit trail
-T-14 idempotency   (independent)
-Phase D            (independent, can run in parallel throughout)
+✅ T-01 features.py ──┬── ✅ T-02 SQL aggregates
+                      ├── ✅ T-03 scoring ──┬── ✅ T-04 policy ──┐
+                      │                     ├── ✅ T-09 tests    │
+                      │                     └──    T-13 registry │
+                      └── ✅ T-08 fix bundle ──   T-15 schema ────┼── T-16 features+
+                                                                  │   └── T-18 data ── T-19 LightGBM
+                                                                  │   └── T-20 anomaly
+                                                                  └── T-17 graph
+✅ T-05 outcomes ──┬── ✅ T-06 chronological split
+                   ├── ✅ T-07 monitor fix
+                   └──    T-12 case queue
+   T-10 RBAC ─────────┘
+✅ T-03 + ✅ T-04 ── T-11 audit trail
+   T-14 idempotency   (independent)
+   Phase D            (independent, can run in parallel throughout)
 ```
+
+**Unblocked right now:** T-10, T-11, T-13, T-14, T-15. T-12 needs T-10 first.
+
+**Suggested order for Phase B:** T-10 → T-12 → T-11 → T-13 → T-14. That finishes the critical
+path (T-12 and T-11 are its last two links) before the supporting work.
 
 **Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11.
 That sequence alone converts a scoring function into an auditable fraud platform with a
