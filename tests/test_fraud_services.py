@@ -47,13 +47,13 @@ class TestGetDecision:
 
 class TestDetectDeviceFraud:
     def _make_db(self, distinct_user_ids):
-        """Return a mock DB that simulates distinct() returning user_id tuples."""
-        mock_query = MagicMock()
-        mock_query.filter.return_value = mock_query
-        mock_query.distinct.return_value = mock_query
-        mock_query.all.return_value = [(uid,) for uid in distinct_user_ids]
+        """Return a mock DB whose COUNT(DISTINCT user_id) yields this many users.
+
+        The count itself is a SQL aggregate since T-02; it is exercised against a
+        real database in tests/test_repositories.py.
+        """
         db = MagicMock()
-        db.query.return_value = mock_query
+        db.execute.return_value.scalar_one.return_value = len(distinct_user_ids)
         return db
 
     def test_fewer_than_3_users_not_flagged(self):

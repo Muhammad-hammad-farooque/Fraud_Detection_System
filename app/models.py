@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Float, ForeignKey, String, DateTime, Boolean
+from sqlalchemy import Column, Index, Integer, Float, ForeignKey, String, DateTime, Boolean
 from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime, timezone
@@ -24,6 +24,9 @@ class Transaction(Base):
     risk_level = Column(String, default="LOW")
     decision = Column(String, default="ALLOW")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    # Every scoring query filters on exactly this pair.
+    __table_args__ = (Index("ix_txn_user_created", "user_id", "created_at"),)
 
     user = relationship("User", back_populates="transactions")
     claims = relationship("Claim", back_populates="transaction")

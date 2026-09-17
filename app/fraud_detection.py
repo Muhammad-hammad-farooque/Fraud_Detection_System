@@ -1,24 +1,25 @@
 from datetime import datetime, timezone
-from .features import FeatureVector, aggregates_from_history, compute_features
+
+from .features import FeatureVector, UserAggregates, compute_features
+from .repositories.transaction_repo import get_device_user_count, get_user_aggregates
 from .scoring import ScoreBreakdown, score
-from .services.fraud_services import count_device_users
 from .ML.models import MODEL_VERSION, predict_fraud
 
 
-def build_feature_vector(db, transaction, user_transactions, now: datetime) -> FeatureVector:
-    """Serving-side feature path: history + device lookup -> compute_features."""
-    aggregates = aggregates_from_history(user_transactions, now)
+def build_feature_vector(
+    transaction, aggregates: UserAggregates, device_user_count: int
+) -> FeatureVector:
+    """Serving-side feature path. Aggregates come from SQL, never from a row scan."""
     return compute_features(
         amount=transaction.amount,
         location=transaction.location,
         aggregates=aggregates,
-        device_user_count=count_device_users(db, transaction.device_id),
+        device_user_count=device_user_count,
     )
 
 
-def score_transaction(db, transaction, user_transactions) -> ScoreBreakdown:
-    """Score a transaction and return the full breakdown behind the number."""
-    fv = build_feature_vector(db, transaction, user_transactions, datetime.now(timezone.utc))
+def score_features(fv: FeatureVector) -> ScoreBreakdown:
+    """Run the rules and the model over an already-computed feature vector."""
     _, probability = predict_fraud(
         amount=fv.amount,
         amount_deviation=fv.amount_deviation,
@@ -29,6 +30,14 @@ def score_transaction(db, transaction, user_transactions) -> ScoreBreakdown:
     return score(fv, probability, MODEL_VERSION)
 
 
-def calculate_risk(db, transaction, user_transactions) -> float:
+def score_transaction(db, transaction, user_id: int, now: datetime | None = None) -> ScoreBreakdown:
+    """Score a transaction and return the full breakdown behind the number."""
+    now = now or datetime.now(timezone.utc)
+    aggregates = get_user_aggregates(db, user_id, now, transaction.location)
+    device_user_count = get_device_user_count(db, transaction.device_id)
+    return score_features(build_feature_vector(transaction, aggregates, device_user_count))
+
+
+def calculate_risk(db, transaction, user_id: int) -> float:
     """Final risk score in [0, 1]. Callers needing the rule trace use score_transaction."""
-    return score_transaction(db, transaction, user_transactions).final_score
+    return score_transaction(db, transaction, user_id).final_score

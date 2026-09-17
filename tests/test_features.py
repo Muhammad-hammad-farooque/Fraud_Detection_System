@@ -154,16 +154,11 @@ class TestServingTrainingParity:
                 _txn(r["amount"], r["location"], r["created_at"])
                 for r in rows[:i] if r["user_id"] == row["user_id"]
             ]
-            with patch(
-                "app.fraud_detection.count_device_users",
-                return_value=device_user_counts[row["device_id"]],
-            ):
-                served = build_feature_vector(
-                    db=None,
-                    transaction=SimpleNamespace(**row),
-                    user_transactions=history,
-                    now=row["created_at"],
-                )
+            served = build_feature_vector(
+                transaction=SimpleNamespace(**row),
+                aggregates=aggregates_from_history(history, row["created_at"]),
+                device_user_count=device_user_counts[row["device_id"]],
+            )
             train_row = trained.iloc[i]
             for name in FEATURE_ORDER:
                 assert getattr(served, name) == pytest.approx(train_row[name]), (seed, i, name)

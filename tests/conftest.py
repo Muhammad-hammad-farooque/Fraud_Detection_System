@@ -49,6 +49,16 @@ def client():
 
 
 @pytest.fixture
+def db_session():
+    """A direct session against the test database, for repository-level tests."""
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@pytest.fixture
 def registered_user(client):
     """Register a user and return their credentials + response data."""
     payload = {"name": "Test User", "email": "test@example.com", "password": "password123"}

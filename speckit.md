@@ -99,7 +99,7 @@ POST /transactions/
 | Features | `app/features.py` | Single pure feature computation path shared by serving and training |
 | Scoring engine | `app/scoring.py`, `app/fraud_detection.py` | Rule evaluation, score aggregation, `ScoreBreakdown` |
 | Inference | `app/ML/models.py` | Loads `model.pkl`, returns `(prediction, probability)` |
-| Persistence | `app/models.py`, `app/database.py` | ORM entities, engine and session |
+| Persistence | `app/models.py`, `app/database.py`, `app/repositories/` | ORM entities, engine, session, bounded scoring reads |
 | Auth | `app/auth.py`, `app/dependencies.py` | JWT issue/decode, bcrypt hashing, `get_current_user` |
 | Contracts | `app/schemas.py` | Pydantic v2 request/response models |
 | Presentation | `frontend/` | Streamlit multipage UI, thin HTTP client |
@@ -192,7 +192,7 @@ These are defects in existing code, not missing features.
 | A4 | **Prediction used as label.** `is_fraud` is derived from `risk_level == "HIGH"`, then consumed downstream as truth. A model's own output must never become its training label. | `app/routers/transactions.py:36` |
 | ~~A5~~ | ~~**Score saturation.** Rule weights sum to 1.8 against a cap of 1.0. Any transaction firing 3+ rules reaches 1.0 before the ML boost is added, so the model's contribution is silently discarded in exactly the cases that matter most.~~ **Resolved by T-03.** | `app/fraud_detection.py` |
 | ~~A6~~ | ~~**Correlated rules double-count.** Rules 1 and 2 (high amount, high deviation) almost always fire together, producing 0.8 and an instant REJECT. A false-positive generator.~~ **Resolved by T-03.** | `app/fraud_detection.py` |
-| A7 | **Unbounded history load.** Scoring calls `.all()` on the user's entire transaction history and iterates it in Python — O(n) latency and memory per request. | `app/routers/transactions.py:22` |
+| ~~A7~~ | ~~**Unbounded history load.** Scoring calls `.all()` on the user's entire transaction history and iterates it in Python — O(n) latency and memory per request.~~ **Resolved by T-02.** | `app/routers/transactions.py:22` |
 | ~~A8~~ | ~~**Feature logic triplicated.** Computed independently in `fraud_detection.py`, `retrain.py:build_features`, and `train_model.py`. Guaranteed train/serve skew.~~ **Resolved by T-01.** | three files |
 | A9 | **Model has no real signal.** Trained on 20 hand-written rows that are perfectly separable on amount alone (legit <= 400, fraud >= 5000), fit on 100% of the data with no holdout. | `app/ML/train_model.py` |
 | A10 | **Uncalibrated probabilities used arithmetically.** RandomForest `predict_proba` is poorly calibrated, yet is multiplied by 0.3 and summed into the score as if it were a true probability. | `app/fraud_detection.py` |
@@ -596,7 +596,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 132 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 144 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -740,12 +740,12 @@ def get_device_user_count(db: Session, device_id: str) -> int:
 
 **Acceptance**
 
-- [ ] No `.all()` on a user's transaction history anywhere in the scoring path
-- [ ] `get_user_aggregates` issues at most two queries
-- [ ] Composite index added: `Index("ix_txn_user_created", user_id, created_at)`
-- [ ] Known-locations lookup uses `EXISTS`, not a full set materialisation
-- [ ] A test asserting scoring issues a bounded number of queries regardless of history size
-- [ ] Existing 76 tests still pass
+- [x] No `.all()` on a user's transaction history anywhere in the scoring path
+- [x] `get_user_aggregates` issues at most two queries
+- [x] Composite index added: `Index("ix_txn_user_created", user_id, created_at)`
+- [x] Known-locations lookup uses `EXISTS`, not a full set materialisation
+- [x] A test asserting scoring issues a bounded number of queries regardless of history size
+- [x] Existing 76 tests still pass
 
 ---
 

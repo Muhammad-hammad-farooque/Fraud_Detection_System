@@ -18,13 +18,7 @@ def create_transaction(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    user_history = (
-        db.query(models.Transaction)
-        .filter(models.Transaction.user_id == current_user.id)
-        .all()
-    )
-
-    risk_score = calculate_risk(db, transaction, user_history)
+    risk_score = calculate_risk(db, transaction, current_user.id)
     risk_level = get_risk_level(risk_score)
     decision   = get_decision(risk_level)
     is_fraud   = risk_level == "HIGH"
