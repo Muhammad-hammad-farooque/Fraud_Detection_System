@@ -71,7 +71,7 @@ and its acceptance boxes ticked in §12.
 | T-14 · Idempotency | `fcbe145` | A15 |
 | T-14b · Step-up authentication flow | `25c6a57` | A13 (`STEP_UP`) |
 | T-15 · Expand the transaction schema | `2a847d1` | prerequisite for T-16, T-17 |
-| T-16 · Feature expansion (retraining moved to T-18) | `pending` | two training bugs from T-05 |
+| T-16 · Feature expansion (retraining moved to T-18) | `05d6902` | two training bugs from T-05 |
 
 **Suite:** 565 tests, 99% coverage of `app/`, under two minutes (four tests start the API
 in a subprocess to prove startup checks).
@@ -1434,7 +1434,7 @@ prerequisite for the rest of Phase C.
 
 ---
 
-#### T-16 · Feature expansion — ✅ DONE (`pending`), retraining moved to T-18
+#### T-16 · Feature expansion — ✅ DONE (`05d6902`), retraining moved to T-18
 
 **Depends on:** T-15
 **Modify:** `app/features.py`, `app/repositories/transaction_repo.py`
