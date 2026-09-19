@@ -49,6 +49,7 @@ class TransactionResponse(BaseModel):
     risk_level: str
     decision: str
     policy_version: str | None = None
+    resolved_decision: str | None = None
     created_at: datetime
 
 # ── Claim ────────────────────────────────────────────────────────
@@ -68,3 +69,41 @@ class ClaimResponse(BaseModel):
     amount: float
     status: str
     created_at: datetime
+
+
+# ── Case ─────────────────────────────────────────────────────────
+class CaseResponse(BaseModel):
+    id: int
+    transaction_id: int
+    claim_id: int | None
+    source: str
+    status: str
+    priority: str
+    risk_score: float
+    amount: float
+    decision: str
+    created_at: datetime
+    sla_due_at: datetime
+    sla_breached: bool
+    assigned_to: int | None
+    assigned_at: datetime | None
+    resolved_by: int | None
+    resolved_at: datetime | None
+    notes: str | None
+
+
+class CaseResolve(BaseModel):
+    is_fraud_confirmed: bool
+    notes: str | None = None
+
+
+class OutcomeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    transaction_id: int
+    is_fraud_confirmed: bool
+    source: str
+    confirmed_by: int | None
+    confirmed_at: datetime
+    notes: str | None

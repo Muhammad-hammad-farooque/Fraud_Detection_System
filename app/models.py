@@ -37,6 +37,10 @@ class Transaction(Base):
     risk_level = Column(String, default="LOW")
     decision = Column(String, default="ALLOW")
     policy_version = Column(String, nullable=True)
+    # `decision` is what the engine decided and is never rewritten - the audit
+    # trail depends on it. When an analyst resolves a review, the outcome lands
+    # here instead: ALLOW if the transaction was legitimate, REJECT if fraud.
+    resolved_decision = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Every scoring query filters on exactly this pair.
@@ -45,6 +49,7 @@ class Transaction(Base):
     user = relationship("User", back_populates="transactions")
     claims = relationship("Claim", back_populates="transaction")
     outcome = relationship("TransactionOutcome", back_populates="transaction", uselist=False)
+    case = relationship("Case", back_populates="transaction", uselist=False)
 
 class Claim(Base):
     __tablename__ = "claims"
@@ -84,3 +89,42 @@ class TransactionOutcome(Base):
     notes              = Column(String, nullable=True)
 
     transaction = relationship("Transaction", back_populates="outcome")
+
+
+class CaseStatus(StrEnum):
+    OPEN     = "OPEN"
+    ASSIGNED = "ASSIGNED"
+    RESOLVED = "RESOLVED"
+
+
+class CaseSource(StrEnum):
+    POLICY_REVIEW = "POLICY_REVIEW"   # the policy layer decided REVIEW
+    CLAIM_REVIEW  = "CLAIM_REVIEW"    # claim verification returned MANUAL_REVIEW
+
+
+class Case(Base):
+    """One unit of analyst work: a transaction awaiting a human determination.
+
+    Resolving a case is what writes a TransactionOutcome, which is the only
+    label source retraining and monitoring accept.
+    """
+    __tablename__ = "cases"
+
+    id             = Column(Integer, primary_key=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), unique=True, nullable=False)
+    claim_id       = Column(Integer, ForeignKey("claims.id"), nullable=True)
+    source         = Column(String, nullable=False)
+    status         = Column(String, nullable=False, default=CaseStatus.OPEN.value)
+    priority       = Column(String, nullable=False)
+    created_at     = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    sla_due_at     = Column(DateTime(timezone=True), nullable=False)
+    assigned_to    = Column(Integer, ForeignKey("users.id"), nullable=True)
+    assigned_at    = Column(DateTime(timezone=True), nullable=True)
+    resolved_by    = Column(Integer, ForeignKey("users.id"), nullable=True)
+    resolved_at    = Column(DateTime(timezone=True), nullable=True)
+    notes          = Column(String, nullable=True)
+
+    __table_args__ = (Index("ix_case_status_created", "status", "created_at"),)
+
+    transaction = relationship("Transaction", back_populates="case")
+    claim = relationship("Claim")

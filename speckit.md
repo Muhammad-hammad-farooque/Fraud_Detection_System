@@ -6,7 +6,7 @@
 | **Version** | 0.1.0 |
 | **Status** | Working prototype — not production ready. Phase A complete; Phase B in progress. |
 | **Last reviewed** | 2026-09-19 |
-| **Progress** | 10 / 33 tasks · 14 / 18 defects fixed — see §1.4 |
+| **Progress** | 11 / 34 tasks · 14 / 18 defects fixed, A13 half-fixed — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -44,13 +44,13 @@ nobody wrote a rule for. This is the standard architecture in payments risk.
 | Role | Needs | Currently supported |
 |---|---|---|
 | Customer | Submit transactions, see decisions, dispute them | Yes |
-| Fraud analyst | Review the manual-check queue, confirm fraud, tune rules | **Partially** — the role and a transaction lookup exist (T-10); the queue is T-12 |
+| Fraud analyst | Review the manual-check queue, confirm fraud, tune rules | **Yes, via the API** (T-12) — no analyst UI yet, and rule tuning waits on T-13 |
 | Data scientist | Retrain, evaluate, monitor drift | Partially (scripts only) |
 | Auditor / regulator | Reconstruct why any decision was made | **No — not implemented** |
 
 ### 1.4 Progress
 
-Phase A is complete and Phase B has started. Each task below is one commit, with its defects struck through in §4.2
+Phase A is complete and Phase B is under way. Each task below is one commit, with its defects struck through in §4.2
 and its acceptance boxes ticked in §12.
 
 | Task | Commit | Fixed |
@@ -65,20 +65,24 @@ and its acceptance boxes ticked in §12.
 | T-08 · Correctness fix bundle | `2fedbef` | A10, A11, A12, A14 |
 | T-09 · Test infrastructure and rule coverage | `5cff5f0` | A17 |
 | T-10 · Role-based access control | `b1e3e38` | prerequisite for T-12 |
+| T-12 · Analyst case queue | `pending` | A13 (REVIEW / MANUAL_REVIEW) |
 
-**Suite:** 288 tests, 98% coverage of `app/`, about 15 seconds.
+**Suite:** 324 tests, 99% coverage of `app/`, under 30 seconds.
 
-**Still open from Phase A's reach:** A9 (weak training data, T-18), A13 (dead review states,
+**Still open:** A9 (weak training data, T-18), A13's `STEP_UP` half (T-14b, added during
 T-12), A15 (no idempotency, T-14), A18 (`networkx` unused — kept deliberately, T-17 uses it).
 
-**Next:** T-12 (analyst queue) is now unblocked and is the task that starts writing the
-`TransactionOutcome` rows T-05 created, which is what makes retraining possible at all —
-until then `retrain.py` correctly exits with no labels to learn from. T-11, T-13 and T-14
-are also unblocked.
+**The label loop is closed.** Resolving a case writes an ANALYST `TransactionOutcome`,
+which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs at least
+20 mature labels (90 days old) before it will train, so the loop turns slowly by design.
+
+**Next:** T-11 (audit trail) completes the critical path. T-13, T-14 and T-14b are also
+unblocked.
 
 **Carried debt, not yet a task:** schema changes land while `create_all()` is still the only
 deployment path, so `migrations/` holds hand-written DDL for databases created earlier —
-`001_phase_a_schema.sql` and `002_user_roles.sql` so far. T-21 must baseline every file there
+`001_phase_a_schema.sql`, `002_user_roles.sql` and `003_cases.sql` so far. `003` also opens a
+case for every transaction already sitting in REVIEW, so none stay dead ends. T-21 must baseline every file there
 when it brings in Alembic.
 
 **Bootstrapping an admin:** the role endpoint needs an admin to call it, so the first one is
@@ -211,7 +215,7 @@ which is T-12.
 
 ### 3.5 Testing
 
-288 tests across 13 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
+324 tests across 14 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -250,7 +254,7 @@ These are defects in existing code, not missing features.
 | A10 | **Uncalibrated probabilities used arithmetically.** RandomForest `predict_proba` is poorly calibrated, yet is multiplied by 0.3 and summed into the score as if it were a true probability. | `app/fraud_detection.py` |
 | ~~A11~~ | ~~**Feature-name mismatch.** A bare numpy array is passed to a model fitted on a DataFrame — emits a warning and relies silently on positional order.~~ **Resolved by T-08.** | `app/ML/models.py:15` |
 | ~~A12~~ | ~~**Naive datetime columns.** `Column(DateTime)` without `timezone=True`, forcing scattered `.replace(tzinfo=utc)` patches at every use site.~~ **Resolved by T-08.** | `app/models.py` |
-| A13 | **Dead decision states.** `REVIEW`, `STEP_UP` (both since T-04) and `MANUAL_REVIEW` are terminal — no code path can resolve them. | system-wide |
+| A13 | ~~**Dead decision states.** `REVIEW` and `MANUAL_REVIEW` are terminal — no code path can resolve them.~~ **Resolved by T-12** via the case queue. **Still open for `STEP_UP`** (since T-04): no task builds the step-up authentication flow that would complete or abandon it — see T-14b. | system-wide |
 | ~~A14~~ | ~~**Claim amount unvalidated server-side.** The backend accepts any amount regardless of the transaction's value; only the frontend enforces a maximum.~~ **Resolved by T-08.** | `app/routers/claims.py` |
 | A15 | **No idempotency.** A retried POST creates a duplicate transaction and falsely inflates the velocity rule. | `app/routers/transactions.py` |
 | ~~A16~~ | ~~**No cold-start handling.** A user's first transaction always has empty known locations, so `is_new_location` fires for every new customer.~~ **Resolved by T-01.** | `app/fraud_detection.py` |
@@ -651,7 +655,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 288 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 324 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -688,6 +692,13 @@ Decisions made while executing Phase A that later tasks must not silently undo.
    `require_customer`; analyst and admin access goes through `/analyst` and `/admin` routers.
    New analyst endpoints use `require_analyst`, which admins also pass. Roles are read from
    the database per request, never from the token.
+10. **The engine's decision is immutable.** `Transaction.decision` records what the engine
+    decided and is never rewritten; a human or challenge outcome goes in
+    `resolved_decision`. T-11's audit trail replays `decision`, so rewriting it would break
+    replay.
+11. **Labels come from lifecycle endpoints, never direct writes.** An ANALYST outcome is
+    written only by resolving a case, which refuses to overwrite an existing outcome of any
+    source. Future label sources (chargeback ingestion, T-14b) follow the same rule.
 
 ### 11.3 Definition of done
 
@@ -1159,7 +1170,7 @@ class DecisionAudit(Base):
 
 ---
 
-#### T-12 · Analyst case queue
+#### T-12 · Analyst case queue — ✅ DONE (`pending`)
 
 **Depends on:** T-10, T-05
 **Fixes:** A13
@@ -1180,12 +1191,12 @@ POST  /v1/analyst/cases/{id}/resolve    body: {is_fraud_confirmed: bool, notes: 
 
 **Acceptance**
 
-- [ ] Every `REVIEW` decision automatically creates a `Case`
-- [ ] Resolving a case writes exactly one `TransactionOutcome`
-- [ ] `MANUAL_REVIEW` and `REVIEW` are no longer terminal states (A13)
-- [ ] Queue sorted by risk score and age; SLA breach flagged
-- [ ] Analyst-only access enforced via `require_role`
-- [ ] Tests for the full lifecycle: create, assign, resolve, label written
+- [x] Every `REVIEW` decision automatically creates a `Case`
+- [x] Resolving a case writes exactly one `TransactionOutcome`
+- [x] `MANUAL_REVIEW` and `REVIEW` are no longer terminal states (A13)
+- [x] Queue sorted by risk score and age; SLA breach flagged
+- [x] Analyst-only access enforced via `require_role`
+- [x] Tests for the full lifecycle: create, assign, resolve, label written
 
 ---
 
@@ -1236,6 +1247,29 @@ def load_model(version: str | None = None) -> tuple[Any, ModelManifest]:
 - [ ] Unique constraint on `(user_id, idempotency_key)`
 - [ ] Retries no longer inflate the velocity feature
 - [ ] Test: the same key twice yields one transaction and identical responses
+
+---
+
+#### T-14b · Step-up authentication flow
+
+**Depends on:** T-04
+**Fixes:** A13 (the `STEP_UP` half)
+**Added:** during T-12, when it became clear no task completes a `STEP_UP` decision
+
+T-04 made `STEP_UP` a real policy action, but nothing acts on it: the customer is never
+challenged, and the transaction sits in `STEP_UP` forever. Industry treats step-up as the
+action that turns would-be false declines into completed payments (§10.3, P4), so it needs a
+lifecycle of its own rather than being folded into the analyst queue.
+
+**Acceptance**
+
+- [ ] A `STEP_UP` decision issues a challenge (OTP in development; pluggable for 3-D Secure)
+- [ ] Passing the challenge sets `resolved_decision = ALLOW`; failing or expiring sets `REJECT`
+- [ ] Challenge expiry is configurable, and expired challenges are resolved, not left pending
+- [ ] Repeated failures open a `Case` for an analyst rather than silently rejecting
+- [ ] The engine's original `decision` is never rewritten — same rule as T-12
+- [ ] Frontend prompts the customer for the challenge
+- [ ] Tests for pass, fail, expiry and the escalation path
 
 ---
 
@@ -1440,16 +1474,17 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
                                                                   └── T-17 graph
 ✅ T-05 outcomes ──┬── ✅ T-06 chronological split
                    ├── ✅ T-07 monitor fix
-                   └──    T-12 case queue
+                   └── ✅ T-12 case queue
 ✅ T-10 RBAC ─────────┘
 ✅ T-03 + ✅ T-04 ── T-11 audit trail
    T-14 idempotency   (independent)
+✅ T-04 ── T-14b step-up auth   (added during T-12)
    Phase D            (independent, can run in parallel throughout)
 ```
 
-**Unblocked right now:** T-11, T-12, T-13, T-14, T-15.
+**Unblocked right now:** T-11, T-13, T-14, T-14b, T-15.
 
-**Suggested order for Phase B:** ~~T-10~~ → T-12 → T-11 → T-13 → T-14. That finishes the critical
+**Suggested order for Phase B:** ~~T-10~~ → ~~T-12~~ → T-11 → T-13 → T-14 → T-14b. That finishes the critical
 path (T-12 and T-11 are its last two links) before the supporting work.
 
 **Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11.

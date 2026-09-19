@@ -111,7 +111,7 @@ def color_decision(val):
     }
     return colors.get(val, "")
 
-display_cols = ["id", "amount", "location", "device_id", "risk_score", "risk_level", "decision", "predicted_fraud", "created_at"]
+display_cols = ["id", "amount", "location", "device_id", "risk_score", "risk_level", "decision", "resolved_decision", "predicted_fraud", "created_at"]
 styled = (
     filtered[display_cols]
     .style

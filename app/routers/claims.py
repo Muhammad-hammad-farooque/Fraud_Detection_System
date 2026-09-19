@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas
 from ..dependencies import get_db, require_customer
+from ..models import CaseSource
+from ..services.case_service import open_case
 from ..services.fraud_services import verify_claim
 
 router = APIRouter(
@@ -65,6 +67,10 @@ def create_claim(
     )
 
     db.add(new_claim)
+    if status == "MANUAL_REVIEW":
+        # Hand the dispute to an analyst rather than leaving it parked (A13).
+        db.flush()
+        open_case(db, transaction, CaseSource.CLAIM_REVIEW, claim=new_claim)
     db.commit()
     db.refresh(new_claim)
     return new_claim

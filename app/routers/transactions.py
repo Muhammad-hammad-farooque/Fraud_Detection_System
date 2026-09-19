@@ -5,6 +5,8 @@ from .. import models, schemas
 from ..fraud_detection import score_transaction
 from ..dependencies import get_db, require_customer
 from ..policy import Decision, PolicyContext, decide, load_policy_config
+from ..models import CaseSource
+from ..services.case_service import open_case
 from ..services.fraud_services import get_risk_level
 
 router = APIRouter(
@@ -39,6 +41,11 @@ def create_transaction(
     )
 
     db.add(new_transaction)
+    if decision == Decision.REVIEW:
+        # Flush for the id, then open the case in the same database transaction:
+        # a REVIEW decision without a case would be a dead end again (A13).
+        db.flush()
+        open_case(db, new_transaction, CaseSource.POLICY_REVIEW)
     db.commit()
     db.refresh(new_transaction)
     return new_transaction

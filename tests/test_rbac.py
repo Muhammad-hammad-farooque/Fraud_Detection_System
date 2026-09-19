@@ -63,6 +63,7 @@ MATRIX = [
     ("GET",   "/claims/",                     None, {CUSTOMER: 200, ANALYST: 403, ADMIN: 403}),
     ("GET",   "/claims/{claim_id}",           None, {CUSTOMER: 200, ANALYST: 403, ADMIN: 403}),
     ("GET",   "/analyst/transactions/{txn_id}", None, {CUSTOMER: 403, ANALYST: 200, ADMIN: 200}),
+    ("GET",   "/analyst/cases",               None, {CUSTOMER: 403, ANALYST: 200, ADMIN: 200}),
     ("GET",   "/admin/users",                 None, {CUSTOMER: 403, ANALYST: 403, ADMIN: 200}),
     ("PATCH", "/admin/users/{customer_id}/role", lambda w: {"role": "CUSTOMER"},
                                                     {CUSTOMER: 403, ANALYST: 403, ADMIN: 200}),
