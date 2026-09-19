@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from .database import engine, Base
-from .routers import user_route, transactions, claims, auth
+from .routers import user_route, transactions, claims, auth, analyst, admin
 
 app = FastAPI(title="Fraud Detection System", version="1.0.0")
 
@@ -10,6 +10,8 @@ app.include_router(auth.router)
 app.include_router(user_route.router)
 app.include_router(transactions.router)
 app.include_router(claims.router)
+app.include_router(analyst.router)
+app.include_router(admin.router)
 
 
 @app.get("/")

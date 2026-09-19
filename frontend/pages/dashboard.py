@@ -15,6 +15,10 @@ with st.spinner("Loading data..."):
     tx_status, tx_data = api.list_transactions(st.session_state.token)
     cl_status, cl_data = api.list_claims(st.session_state.token)
 
+if tx_status == 403:
+    st.info("This page is for customer accounts. Analyst and admin tools are served by the API "
+            "under /analyst and /admin.")
+    st.stop()
 if tx_status != 200:
     st.error("Failed to load transactions.")
     st.stop()

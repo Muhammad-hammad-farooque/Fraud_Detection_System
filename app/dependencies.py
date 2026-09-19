@@ -39,3 +39,34 @@ def get_current_user(
         )
 
     return user
+
+
+def require_role(*allowed: models.Role):
+    """Dependency factory. Raises 403 when current_user.role is not in allowed.
+
+    The role is read from the database on every request rather than from the
+    token, so a demotion takes effect immediately instead of when the token
+    expires.
+    """
+    allowed_values = {role.value for role in allowed}
+
+    def dependency(current_user: models.User = Depends(get_current_user)) -> models.User:
+        if current_user.role not in allowed_values:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient role for this endpoint",
+            )
+        return current_user
+
+    return dependency
+
+
+# Customer-scoped routes. Staff accounts do not make payments or file disputes:
+# they would otherwise gain a second, silent path into customer data flows, and
+# their own activity would be mixed into the labels analysts produce.
+require_customer = require_role(models.Role.CUSTOMER)
+
+# Analyst routes see every customer's records. Admins inherit analyst access.
+require_analyst = require_role(models.Role.ANALYST, models.Role.ADMIN)
+
+require_admin = require_role(models.Role.ADMIN)

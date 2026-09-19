@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas
-from ..dependencies import get_db, get_current_user
+from ..dependencies import get_db, require_customer
 from ..services.fraud_services import verify_claim
 
 router = APIRouter(
@@ -14,7 +14,7 @@ router = APIRouter(
 @router.get("/", response_model=List[schemas.ClaimResponse])
 def list_claims(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_customer)
 ):
     """Return all claims filed by the logged-in user."""
     return (
@@ -29,7 +29,7 @@ def list_claims(
 def create_claim(
     claim: schemas.ClaimCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_customer)
 ):
     """File a dispute claim on a transaction. Only the transaction owner can claim."""
     transaction = (
@@ -74,7 +74,7 @@ def create_claim(
 def get_claim(
     claim_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_customer)
 ):
     """Get a claim by ID. Only the transaction owner can view it."""
     claim = db.query(models.Claim).filter(models.Claim.id == claim_id).first()

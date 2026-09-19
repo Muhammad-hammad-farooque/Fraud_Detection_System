@@ -4,12 +4,22 @@ from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime, timezone
 
+class Role(StrEnum):
+    CUSTOMER = "CUSTOMER"
+    ANALYST  = "ANALYST"
+    ADMIN    = "ADMIN"
+
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     email = Column(String, unique=True, nullable=False)
     hashed_password = Column(String, nullable=False)
+    # Never set from a request body: registration always yields CUSTOMER, and
+    # only an admin (or scripts/set_role.py) can change it.
+    role = Column(String, nullable=False, default=Role.CUSTOMER.value,
+                  server_default=Role.CUSTOMER.value)
     transactions = relationship("Transaction", back_populates="user")
 
 class Transaction(Base):

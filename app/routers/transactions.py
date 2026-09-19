@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas
 from ..fraud_detection import score_transaction
-from ..dependencies import get_db, get_current_user
+from ..dependencies import get_db, require_customer
 from ..policy import Decision, PolicyContext, decide, load_policy_config
 from ..services.fraud_services import get_risk_level
 
@@ -17,7 +17,7 @@ router = APIRouter(
 def create_transaction(
     transaction: schemas.TransactionCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_customer)
 ):
     breakdown  = score_transaction(db, transaction, current_user.id)
     risk_score = breakdown.final_score
@@ -47,7 +47,7 @@ def create_transaction(
 @router.get("/", response_model=List[schemas.TransactionResponse])
 def list_transactions(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_customer)
 ):
     """Return all transactions for the logged-in user."""
     return (
@@ -61,7 +61,7 @@ def list_transactions(
 def get_transaction(
     transaction_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(require_customer)
 ):
     transaction = (
         db.query(models.Transaction)

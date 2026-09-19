@@ -21,6 +21,12 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 from app.database import Base
 from app.main import app
 from app.dependencies import get_db
+from app import auth
+
+# Real bcrypt, at its minimum cost factor. Production keeps passlib's default
+# (12 rounds); at that cost the role matrix alone, which registers three
+# accounts per test, turns a one-minute suite into a four-minute one.
+auth.pwd_context.update(bcrypt__rounds=4)
 
 SQLITE_URL = "sqlite:///:memory:"
 engine = create_engine(

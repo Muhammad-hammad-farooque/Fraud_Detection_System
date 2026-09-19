@@ -4,9 +4,9 @@
 |---|---|
 | **Project** | Fraud Detection System |
 | **Version** | 0.1.0 |
-| **Status** | Working prototype — not production ready. Phase A (correctness) complete. |
-| **Last reviewed** | 2026-09-18 |
-| **Progress** | 9 / 33 tasks · 14 / 18 defects fixed — see §1.4 |
+| **Status** | Working prototype — not production ready. Phase A complete; Phase B in progress. |
+| **Last reviewed** | 2026-09-19 |
+| **Progress** | 10 / 33 tasks · 14 / 18 defects fixed — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -44,13 +44,13 @@ nobody wrote a rule for. This is the standard architecture in payments risk.
 | Role | Needs | Currently supported |
 |---|---|---|
 | Customer | Submit transactions, see decisions, dispute them | Yes |
-| Fraud analyst | Review the manual-check queue, confirm fraud, tune rules | **No — not implemented** |
+| Fraud analyst | Review the manual-check queue, confirm fraud, tune rules | **Partially** — the role and a transaction lookup exist (T-10); the queue is T-12 |
 | Data scientist | Retrain, evaluate, monitor drift | Partially (scripts only) |
 | Auditor / regulator | Reconstruct why any decision was made | **No — not implemented** |
 
 ### 1.4 Progress
 
-Phase A is complete. Each task below is one commit, with its defects struck through in §4.2
+Phase A is complete and Phase B has started. Each task below is one commit, with its defects struck through in §4.2
 and its acceptance boxes ticked in §12.
 
 | Task | Commit | Fixed |
@@ -64,20 +64,25 @@ and its acceptance boxes ticked in §12.
 | T-07 · Monitoring ground truth | `935151b` | A3 |
 | T-08 · Correctness fix bundle | `2fedbef` | A10, A11, A12, A14 |
 | T-09 · Test infrastructure and rule coverage | `5cff5f0` | A17 |
+| T-10 · Role-based access control | `pending` | prerequisite for T-12 |
 
-**Suite:** 227 tests, 98% coverage of `app/`.
+**Suite:** 288 tests, 98% coverage of `app/`, about 15 seconds.
 
 **Still open from Phase A's reach:** A9 (weak training data, T-18), A13 (dead review states,
 T-12), A15 (no idempotency, T-14), A18 (`networkx` unused — kept deliberately, T-17 uses it).
 
-**Next, with nothing blocking:** T-10 (RBAC) and T-14 (idempotency). T-12 is the task that
-starts writing the `TransactionOutcome` rows T-05 created, which is what makes retraining
-possible at all — until then `retrain.py` correctly exits with no labels to learn from.
+**Next:** T-12 (analyst queue) is now unblocked and is the task that starts writing the
+`TransactionOutcome` rows T-05 created, which is what makes retraining possible at all —
+until then `retrain.py` correctly exits with no labels to learn from. T-11, T-13 and T-14
+are also unblocked.
 
-**Carried debt, not yet a task:** T-04 and T-05 changed the schema while `create_all()` is
-still the only deployment path, so `migrations/001_phase_a_schema.sql` holds the equivalent
-DDL for databases created before Phase A. T-21 must baseline that file when it brings in
-Alembic. Any Phase B task that adds a column has the same problem and should extend that file.
+**Carried debt, not yet a task:** schema changes land while `create_all()` is still the only
+deployment path, so `migrations/` holds hand-written DDL for databases created earlier —
+`001_phase_a_schema.sql` and `002_user_roles.sql` so far. T-21 must baseline every file there
+when it brings in Alembic.
+
+**Bootstrapping an admin:** the role endpoint needs an admin to call it, so the first one is
+created out of band with `python -m scripts.set_role someone@bank.com ADMIN`.
 
 ---
 
@@ -206,7 +211,7 @@ which is T-12.
 
 ### 3.5 Testing
 
-227 tests across 12 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
+288 tests across 13 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -646,7 +651,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 227 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 288 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -675,9 +680,14 @@ Decisions made while executing Phase A that later tasks must not silently undo.
    timestamp, because SQLite returns naive datetimes whatever the column type. Do not
    reintroduce `.replace(tzinfo=utc)` at call sites.
 7. **The test suite is in-memory.** `StaticPool` is required; without it each connection gets
-   its own empty database. No test may write a file to the repository.
+   its own empty database. No test may write a file to the repository. Tests hash passwords
+   at bcrypt's minimum cost; production keeps passlib's default.
 8. **Schema changes need a hand-written migration** in `migrations/` until T-21, because
    `create_all()` cannot alter an existing table.
+9. **Staff never use customer routes.** Transaction and claim endpoints are customer-only via
+   `require_customer`; analyst and admin access goes through `/analyst` and `/admin` routers.
+   New analyst endpoints use `require_analyst`, which admins also pass. Roles are read from
+   the database per request, never from the token.
 
 ### 11.3 Definition of done
 
@@ -1086,7 +1096,7 @@ engine = create_engine(
 
 ---
 
-#### T-10 · Role-based access control
+#### T-10 · Role-based access control — ✅ DONE (`pending`)
 
 **Depends on:** none
 **Fixes:** prerequisite for T-12
@@ -1106,10 +1116,10 @@ def require_role(*allowed: Role):
 
 **Acceptance**
 
-- [ ] `User.role` column added, defaulting to `CUSTOMER`, with a migration
-- [ ] Analyst endpoints reject customers with 403
-- [ ] Customer endpoints remain scoped to `current_user.id` — an analyst must not silently gain access to customer-scoped routes
-- [ ] Tests for every role against every endpoint
+- [x] `User.role` column added, defaulting to `CUSTOMER`, with a migration
+- [x] Analyst endpoints reject customers with 403
+- [x] Customer endpoints remain scoped to `current_user.id` — an analyst must not silently gain access to customer-scoped routes
+- [x] Tests for every role against every endpoint
 
 ---
 
@@ -1431,15 +1441,15 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
 ✅ T-05 outcomes ──┬── ✅ T-06 chronological split
                    ├── ✅ T-07 monitor fix
                    └──    T-12 case queue
-   T-10 RBAC ─────────┘
+✅ T-10 RBAC ─────────┘
 ✅ T-03 + ✅ T-04 ── T-11 audit trail
    T-14 idempotency   (independent)
    Phase D            (independent, can run in parallel throughout)
 ```
 
-**Unblocked right now:** T-10, T-11, T-13, T-14, T-15. T-12 needs T-10 first.
+**Unblocked right now:** T-11, T-12, T-13, T-14, T-15.
 
-**Suggested order for Phase B:** T-10 → T-12 → T-11 → T-13 → T-14. That finishes the critical
+**Suggested order for Phase B:** ~~T-10~~ → T-12 → T-11 → T-13 → T-14. That finishes the critical
 path (T-12 and T-11 are its last two links) before the supporting work.
 
 **Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11.

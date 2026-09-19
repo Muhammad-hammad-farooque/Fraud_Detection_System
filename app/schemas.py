@@ -1,6 +1,8 @@
 from pydantic import BaseModel, EmailStr, ConfigDict, Field
 from datetime import datetime
 
+from .models import Role
+
 # ── User ─────────────────────────────────────────────────────────
 class UserRegister(BaseModel):
     name: str
@@ -13,6 +15,11 @@ class UserResponse(BaseModel):
     id: int
     name: str
     email: str
+    role: str
+
+
+class RoleUpdate(BaseModel):
+    role: Role
 
 # ── Auth ─────────────────────────────────────────────────────────
 class LoginRequest(BaseModel):
