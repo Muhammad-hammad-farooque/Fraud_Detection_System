@@ -67,7 +67,7 @@ and its acceptance boxes ticked in §12.
 | T-10 · Role-based access control | `b1e3e38` | prerequisite for T-12 |
 | T-12 · Analyst case queue | `f50ea16` | A13 (REVIEW / MANUAL_REVIEW) |
 | T-11 · Immutable decision audit trail | `969e0f0` | P6 |
-| T-13 · Model registry and config-driven rules | `pending` | — |
+| T-13 · Model registry and config-driven rules | `2d2550c` | — |
 
 **Suite:** 392 tests, 99% coverage of `app/`, a little over a minute (four tests start the
 API in a subprocess to prove startup checks).
@@ -1235,7 +1235,7 @@ POST  /v1/analyst/cases/{id}/resolve    body: {is_fraud_confirmed: bool, notes: 
 
 ---
 
-#### T-13 · Model registry and config-driven rules — ✅ DONE (`pending`)
+#### T-13 · Model registry and config-driven rules — ✅ DONE (`2d2550c`)
 
 **Depends on:** T-03
 **Create:** `app/ML/registry.py`, `config/rules.yaml`
