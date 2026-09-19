@@ -76,6 +76,17 @@ def create_transaction(token: str, location: str, amount: float, device_id: str,
                                      "have gone through; check your transaction history."}
 
 
+def verify_step_up(token: str, transaction_id: int, code: str):
+    """Answer the step-up challenge on a STEP_UP transaction."""
+    r = requests.post(
+        f"{BASE_URL}/transactions/{transaction_id}/step-up",
+        json={"code": code},
+        headers=_headers(token),
+        timeout=10,
+    )
+    return _parse(r)
+
+
 # ── Claims ────────────────────────────────────────────────────────────────────
 
 def list_claims(token: str):

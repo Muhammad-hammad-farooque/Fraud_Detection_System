@@ -63,6 +63,7 @@ class Transaction(Base):
     claims = relationship("Claim", back_populates="transaction")
     outcome = relationship("TransactionOutcome", back_populates="transaction", uselist=False)
     case = relationship("Case", back_populates="transaction", uselist=False)
+    step_up = relationship("StepUpChallenge", back_populates="transaction", uselist=False)
 
 class Claim(Base):
     __tablename__ = "claims"
@@ -111,8 +112,9 @@ class CaseStatus(StrEnum):
 
 
 class CaseSource(StrEnum):
-    POLICY_REVIEW = "POLICY_REVIEW"   # the policy layer decided REVIEW
-    CLAIM_REVIEW  = "CLAIM_REVIEW"    # claim verification returned MANUAL_REVIEW
+    POLICY_REVIEW  = "POLICY_REVIEW"   # the policy layer decided REVIEW
+    CLAIM_REVIEW   = "CLAIM_REVIEW"    # claim verification returned MANUAL_REVIEW
+    STEP_UP_FAILED = "STEP_UP_FAILED"  # the customer exhausted their step-up attempts
 
 
 class Case(Base):
@@ -188,3 +190,40 @@ def _refuse_audit_update(mapper, connection, target):
 @event.listens_for(DecisionAudit, "before_delete")
 def _refuse_audit_delete(mapper, connection, target):
     raise AuditImmutableError("decision_audits is append-only; rows cannot be deleted")
+
+
+class ChallengeStatus(StrEnum):
+    PENDING = "PENDING"
+    PASSED  = "PASSED"
+    FAILED  = "FAILED"    # attempts exhausted: held for an analyst
+    EXPIRED = "EXPIRED"
+
+
+class StepUpChallenge(Base):
+    """Extra authentication requested by a STEP_UP decision (T-14b, P4).
+
+    The code itself is never stored: only an HMAC of it, keyed with the server
+    secret. Passing a challenge is not a fraud label - one-time codes can be
+    phished or SIM-swapped - so resolving one writes no TransactionOutcome.
+    """
+    __tablename__ = "step_up_challenges"
+
+    id             = Column(Integer, primary_key=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), unique=True, nullable=False)
+    method         = Column(String, nullable=False)          # "OTP"; pluggable for 3-D Secure
+    code_hash      = Column(String(64), nullable=False)
+    status         = Column(String, nullable=False, default=ChallengeStatus.PENDING.value)
+    attempts       = Column(Integer, nullable=False, default=0)
+    max_attempts   = Column(Integer, nullable=False)
+    created_at     = Column(DateTime(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+    expires_at     = Column(DateTime(timezone=True), nullable=False)
+    resolved_at    = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_step_up_status_expires", "status", "expires_at"),)
+
+    transaction = relationship("Transaction", back_populates="step_up")
+
+    @property
+    def attempts_remaining(self) -> int:
+        return max(self.max_attempts - self.attempts, 0)

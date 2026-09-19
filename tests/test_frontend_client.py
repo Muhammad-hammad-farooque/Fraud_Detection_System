@@ -97,3 +97,24 @@ class TestLostResponse:
         db_session.expire_all()
         assert db_session.query(models.Transaction).count() == 1
         assert db_session.query(models.DecisionAudit).count() == 1
+
+
+class TestStepUpClient:
+    def test_verify_step_up_round_trip(self, api_client, client, auth_headers, rules_config, monkeypatch):
+        """The client's answer reaches the real endpoint and the payment is allowed."""
+        rules_config(policy={"allow_below": 0, "step_up_below": 1.01, "review_below": 1.01})
+        monkeypatch.setenv("STEP_UP_DEV_ECHO", "true")
+
+        def through_the_real_api(url, json, headers, timeout):
+            path = url.split("://", 1)[1].split("/", 1)[1]
+            return client.post("/" + path, json=json, headers=headers)
+
+        monkeypatch.setattr(api_client.requests, "post", through_the_real_api)
+        token = _token(auth_headers)
+        status, txn = api_client.create_transaction(token, "Lahore", 100.0, "d1")
+        assert status == 200 and txn["decision"] == "STEP_UP"
+
+        status, verified = api_client.verify_step_up(token, txn["id"], txn["step_up"]["dev_code"])
+        assert status == 200
+        assert verified["step_up"]["status"] == "PASSED"
+        assert verified["resolved_decision"] == "ALLOW"

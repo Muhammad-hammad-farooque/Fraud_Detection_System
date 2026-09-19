@@ -11,7 +11,9 @@ from ..fraud_detection import score_transaction
 from ..dependencies import get_db, require_customer
 from ..policy import Decision, PolicyContext, decide, load_policy_config
 from ..models import CaseSource
+from ..services import step_up
 from ..services.case_service import open_case
+from ..services.step_up import StepUpError
 from ..services.fraud_services import get_risk_level
 
 router = APIRouter(
@@ -101,6 +103,10 @@ def create_transaction(
         record_decision(db, new_transaction, breakdown, decision, policy, context)
         if decision == Decision.REVIEW:
             open_case(db, new_transaction, CaseSource.POLICY_REVIEW)
+        challenge_code = None
+        if decision == Decision.STEP_UP:
+            # A STEP_UP without a challenge would be a dead end (A13).
+            challenge, challenge_code = step_up.issue_challenge(db, new_transaction)
         db.commit()
     except IntegrityError:
         # Two requests with the same key raced past the lookup. The unique
@@ -114,7 +120,45 @@ def create_transaction(
             raise
         return _replay(existing, fingerprint, response)
     db.refresh(new_transaction)
-    return new_transaction
+    if challenge_code is None:
+        return new_transaction
+
+    # Deliver only now that the payment is committed: a rolled-back payment
+    # must never send the customer a code.
+    step_up.get_sender().send(current_user, new_transaction.step_up, challenge_code)
+    body = schemas.TransactionResponse.model_validate(new_transaction)
+    if step_up.load_step_up_config().dev_echo:
+        body.step_up.dev_code = challenge_code
+    return body
+
+
+@router.post("/{transaction_id}/step-up", response_model=schemas.TransactionResponse)
+def verify_step_up(
+    transaction_id: int,
+    body: schemas.StepUpVerify,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_customer)
+):
+    """Answer the step-up challenge on one of your own transactions.
+
+    Returns the transaction with its challenge: PASSED allows the payment,
+    EXPIRED rejects it, and FAILED holds it for an analyst.
+    """
+    transaction = (
+        db.query(models.Transaction)
+        .filter(models.Transaction.id == transaction_id,
+                models.Transaction.user_id == current_user.id)
+        .first()
+    )
+    if not transaction or transaction.step_up is None:
+        raise HTTPException(status_code=404, detail="No step-up challenge for this transaction")
+    try:
+        step_up.verify(db, transaction.step_up, body.code)
+    except StepUpError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    db.commit()
+    db.refresh(transaction)
+    return transaction
 
 
 @router.get("/", response_model=List[schemas.TransactionResponse])

@@ -40,7 +40,12 @@ if submitted:
             elif decision == "REVIEW":
                 st.warning(f"Transaction sent for REVIEW — {risk} risk (score: {score}).")
             elif decision == "STEP_UP":
-                st.info(f"Additional verification required — {risk} risk (score: {score}).")
+                st.info(f"Additional verification required — {risk} risk (score: {score}). "
+                        "Enter the code sent to you below.")
+                st.session_state.pending_step_up = {
+                    "transaction_id": data["id"],
+                    "dev_code": (data.get("step_up") or {}).get("dev_code"),
+                }
             else:
                 st.success(f"Transaction APPROVED — {risk} risk (score: {score}).")
 
@@ -50,6 +55,36 @@ if submitted:
             col_c.metric("Decision", decision)
         else:
             st.error(data.get("detail", "Transaction failed."))
+
+# ── Step-up verification ──────────────────────────────────────────────────────
+pending = st.session_state.get("pending_step_up")
+if pending:
+    st.markdown("---")
+    st.subheader(f"Verify transaction #{pending['transaction_id']}")
+    if pending.get("dev_code"):
+        st.caption(f"Development mode — your code is **{pending['dev_code']}**")
+    with st.form("step_up_form"):
+        code = st.text_input("Verification code", max_chars=16)
+        verified = st.form_submit_button("Verify", use_container_width=True)
+    if verified:
+        status, data = api.verify_step_up(st.session_state.token, pending["transaction_id"], code)
+        if status == 200:
+            challenge = data["step_up"]
+            if challenge["status"] == "PASSED":
+                st.success("Verified — the transaction is approved.")
+                del st.session_state["pending_step_up"]
+            elif challenge["status"] == "PENDING":
+                st.error(f"That code is not right. {challenge['attempts_remaining']} attempt(s) left.")
+            elif challenge["status"] == "FAILED":
+                st.warning("Too many incorrect codes. The transaction is on hold for review.")
+                del st.session_state["pending_step_up"]
+            else:
+                st.error("The code has expired, so the transaction was declined.")
+                del st.session_state["pending_step_up"]
+        else:
+            st.error(data.get("detail", "Verification failed."))
+            if status in (404, 409):
+                del st.session_state["pending_step_up"]
 
 st.markdown("---")
 

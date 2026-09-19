@@ -4,9 +4,9 @@
 |---|---|
 | **Project** | Fraud Detection System |
 | **Version** | 0.1.0 |
-| **Status** | Working prototype — not production ready. Phase A complete; Phase B in progress. |
+| **Status** | Working prototype — not production ready. Phases A and B complete. |
 | **Last reviewed** | 2026-09-19 |
-| **Progress** | 14 / 34 tasks · 15 / 18 defects fixed, A13 half-fixed — critical path complete — see §1.4 |
+| **Progress** | 15 / 34 tasks · 16 / 18 defects fixed — Phases A and B complete — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -50,7 +50,7 @@ nobody wrote a rule for. This is the standard architecture in payments risk.
 
 ### 1.4 Progress
 
-Phase A is complete and Phase B is under way. Each task below is one commit, with its defects struck through in §4.2
+Phases A and B are complete. Each task below is one commit, with its defects struck through in §4.2
 and its acceptance boxes ticked in §12.
 
 | Task | Commit | Fixed |
@@ -69,12 +69,13 @@ and its acceptance boxes ticked in §12.
 | T-11 · Immutable decision audit trail | `969e0f0` | P6 |
 | T-13 · Model registry and config-driven rules | `2d2550c` | — |
 | T-14 · Idempotency | `fcbe145` | A15 |
+| T-14b · Step-up authentication flow | `pending` | A13 (`STEP_UP`) |
 
-**Suite:** 416 tests, 99% coverage of `app/`, a little over a minute (four tests start the
-API in a subprocess to prove startup checks).
+**Suite:** 443 tests, 99% coverage of `app/`, about a minute and a half (four tests start
+the API in a subprocess to prove startup checks).
 
-**Still open:** A9 (weak training data, T-18), A13's `STEP_UP` half (T-14b, added during
-T-12), A18 (`networkx` unused — kept deliberately, T-17 uses it).
+**Still open:** A9 (weak training data, T-18) and A18 (`networkx` unused — kept
+deliberately, T-17 uses it). Both close in Phase C.
 
 **The label loop is closed.** Resolving a case writes an ANALYST `TransactionOutcome`,
 which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs at least
@@ -84,7 +85,12 @@ which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs
 is now scored on one feature path, decided by a separate policy, recorded immutably, and —
 when it needs a human — routed to an analyst whose determination becomes a training label.
 
-**Next:** T-14b (step-up flow) finishes Phase B. T-15 opens Phase C.
+**Next:** Phase C, starting with T-15 (expand the transaction schema), which blocks every
+other prediction-power task. Phase D is independent and can run at any time.
+
+**Operational to-dos that are not tasks:** schedule `scripts/expire_challenges.py` (every
+minute is reasonable), and replace `LogSender` with a real delivery channel before any
+production use — it writes one-time codes to the server log.
 
 **Retuning:** edit `config/rules.yaml`. It is validated before use and picked up on the next
 request. The first version is `rules-1` / `policy-1`, which reproduces the pre-T-13 numbers
@@ -92,7 +98,8 @@ exactly — a test pins that.
 
 **Carried debt, not yet a task:** schema changes land while `create_all()` is still the only
 deployment path, so `migrations/` holds hand-written DDL for databases created earlier —
-`001` to `006` so far. `003` also opens a case for every transaction already sitting in
+`001` to `007` so far. `007` also settles any transaction left in
+STEP_UP from before T-14b as rejected, since those customers were never challenged. `003` also opens a case for every transaction already sitting in
 REVIEW, so none stay dead ends. `004` adds a trigger that makes `decision_audits`
 append-only in PostgreSQL, and deliberately does *not* backfill audit rows for older
 transactions: their feature vectors were never stored, and a reconstructed record would look
@@ -230,7 +237,7 @@ which is T-12.
 
 ### 3.5 Testing
 
-416 tests across 19 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
+443 tests across 20 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -269,7 +276,7 @@ These are defects in existing code, not missing features.
 | A10 | **Uncalibrated probabilities used arithmetically.** RandomForest `predict_proba` is poorly calibrated, yet is multiplied by 0.3 and summed into the score as if it were a true probability. | `app/fraud_detection.py` |
 | ~~A11~~ | ~~**Feature-name mismatch.** A bare numpy array is passed to a model fitted on a DataFrame — emits a warning and relies silently on positional order.~~ **Resolved by T-08.** | `app/ML/models.py:15` |
 | ~~A12~~ | ~~**Naive datetime columns.** `Column(DateTime)` without `timezone=True`, forcing scattered `.replace(tzinfo=utc)` patches at every use site.~~ **Resolved by T-08.** | `app/models.py` |
-| A13 | ~~**Dead decision states.** `REVIEW` and `MANUAL_REVIEW` are terminal — no code path can resolve them.~~ **Resolved by T-12** via the case queue. **Still open for `STEP_UP`** (since T-04): no task builds the step-up authentication flow that would complete or abandon it — see T-14b. | system-wide |
+| ~~A13~~ | ~~**Dead decision states.** `REVIEW`, `MANUAL_REVIEW` and `STEP_UP` are terminal — no code path can resolve them.~~ **Resolved by T-12** (`REVIEW`, `MANUAL_REVIEW`) **and T-14b** (`STEP_UP`). | system-wide |
 | ~~A14~~ | ~~**Claim amount unvalidated server-side.** The backend accepts any amount regardless of the transaction's value; only the frontend enforces a maximum.~~ **Resolved by T-08.** | `app/routers/claims.py` |
 | ~~A15~~ | ~~**No idempotency.** A retried POST creates a duplicate transaction and falsely inflates the velocity rule.~~ **Resolved by T-14.** | `app/routers/transactions.py` |
 | ~~A16~~ | ~~**No cold-start handling.** A user's first transaction always has empty known locations, so `is_new_location` fires for every new customer.~~ **Resolved by T-01.** | `app/fraud_detection.py` |
@@ -648,7 +655,7 @@ Not F1. The operating metrics are:
 | Streaming velocity counters | ~~In-Python scan of full history~~ bounded SQL; Redis still T-33 | ~~T-02~~ ✅ |
 | Policy layer separate from model | ~~Thresholds fused into the scorer~~ `app/policy.py` | ~~T-04~~ ✅ |
 | Calibrated probability | Raw uncalibrated `predict_proba` | T-19 |
-| Step-up auth as a third action | ~~Allow / review / reject only~~ STEP_UP shipped | ~~T-04~~ ✅ |
+| Step-up auth as a third action | ~~Allow / review / reject only~~ STEP_UP decided (T-04) and completed by an OTP challenge (T-14b) | ~~T-04, T-14b~~ ✅ |
 | Chargeback and analyst labels | ~~Model's own output used as label~~ `TransactionOutcome`, unwritten until T-12 | ~~T-05~~ ✅ |
 | Full decision audit log | ~~Nothing logged~~ append-only, replayable | ~~T-11~~ ✅ |
 | Graph and ring features | 1-hop device degree only | T-17 |
@@ -669,7 +676,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 416 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 443 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -715,7 +722,9 @@ Decisions made while executing Phase A that later tasks must not silently undo.
     replay.
 11. **Labels come from lifecycle endpoints, never direct writes.** An ANALYST outcome is
     written only by resolving a case, which refuses to overwrite an existing outcome of any
-    source. Future label sources (chargeback ingestion, T-14b) follow the same rule.
+    source. Future label sources (chargeback ingestion) follow the same rule. Step-up
+    results are deliberately *not* a label source: an OTP proves possession of a phone, not
+    the legitimacy of a payment.
 12. **Every decision is audited in its own database transaction.** `record_decision` runs
     before the commit that saves the transaction, never after. Anything that changes how a
     score is computed — a new rule, a new weight, a new policy input — must also land in
@@ -734,6 +743,10 @@ Decisions made while executing Phase A that later tasks must not silently undo.
     endpoint that creates a payment-like record — refunds, chargeback ingestion, T-14b's
     challenge completion — follows the same pattern: check the key, then rely on a unique
     constraint to settle races, with the whole write inside one database transaction.
+16. **Secrets and side effects wait for the commit.** Anything that leaves the system — an
+    OTP, and later notifications or webhooks — is sent only after the database commit
+    succeeds, never inside the transaction. One-time codes are stored only as keyed hashes
+    and compared in constant time.
 
 ### 11.3 Definition of done
 
@@ -1317,7 +1330,7 @@ def load_model(version: str | None = None) -> tuple[Any, ModelManifest]:
 
 ---
 
-#### T-14b · Step-up authentication flow
+#### T-14b · Step-up authentication flow — ✅ DONE (`pending`)
 
 **Depends on:** T-04
 **Fixes:** A13 (the `STEP_UP` half)
@@ -1328,15 +1341,34 @@ challenged, and the transaction sits in `STEP_UP` forever. Industry treats step-
 action that turns would-be false declines into completed payments (§10.3, P4), so it needs a
 lifecycle of its own rather than being folded into the analyst queue.
 
+**As built:**
+
+- The acceptance line "failing sets `REJECT`" conflicted with "repeated failures open a
+  `Case` rather than silently rejecting". Resolved in favour of the case: a wrong code spends
+  an attempt, and exhausting them marks the challenge FAILED and holds the payment
+  (`resolved_decision` stays empty) until an analyst settles it through T-12. Only expiry
+  rejects automatically.
+- Codes are six digits, stored only as an HMAC keyed with the server secret, compared in
+  constant time, and delivered *after* the commit so a rolled-back payment sends nothing.
+- Delivery is a pluggable `ChallengeSender`. The default `LogSender` writes the code to the
+  server log and is for development only. `STEP_UP_DEV_ECHO=true` returns the code in the
+  creating response so the local frontend is usable; it is off by default.
+- Expiry is applied when the customer answers and by `scripts/expire_challenges.py`, which
+  must be scheduled for abandoned challenges to settle.
+- No step-up outcome writes a `TransactionOutcome`: passing an OTP is not proof of
+  legitimacy (SIM swap, phishing), and failing one is not proof of fraud.
+- The Streamlit prompt was syntax-checked and its API call tested end to end; the page
+  itself was not run, because Streamlit is not installed in the API's test environment.
+
 **Acceptance**
 
-- [ ] A `STEP_UP` decision issues a challenge (OTP in development; pluggable for 3-D Secure)
-- [ ] Passing the challenge sets `resolved_decision = ALLOW`; failing or expiring sets `REJECT`
-- [ ] Challenge expiry is configurable, and expired challenges are resolved, not left pending
-- [ ] Repeated failures open a `Case` for an analyst rather than silently rejecting
-- [ ] The engine's original `decision` is never rewritten — same rule as T-12
-- [ ] Frontend prompts the customer for the challenge
-- [ ] Tests for pass, fail, expiry and the escalation path
+- [x] A `STEP_UP` decision issues a challenge (OTP in development; pluggable for 3-D Secure)
+- [x] Passing the challenge sets `resolved_decision = ALLOW`; failing or expiring sets `REJECT`
+- [x] Challenge expiry is configurable, and expired challenges are resolved, not left pending
+- [x] Repeated failures open a `Case` for an analyst rather than silently rejecting
+- [x] The engine's original `decision` is never rewritten — same rule as T-12
+- [x] Frontend prompts the customer for the challenge
+- [x] Tests for pass, fail, expiry and the escalation path
 
 ---
 
@@ -1545,13 +1577,16 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
 ✅ T-10 RBAC ─────────┘
 ✅ T-03 + ✅ T-04 ── ✅ T-11 audit trail
 ✅ T-14 idempotency   (independent)
-✅ T-04 ── T-14b step-up auth   (added during T-12)
+✅ T-04 ── ✅ T-14b step-up auth   (added during T-12)
    Phase D            (independent, can run in parallel throughout)
 ```
 
-**Unblocked right now:** T-14b, T-15, and all of Phase D.
+**Unblocked right now:** T-15, and all of Phase D. **Phase B is complete.**
 
-**Suggested order for Phase B:** ~~T-10~~ → ~~T-12~~ → ~~T-11~~ → ~~T-13~~ → ~~T-14~~ → T-14b. That finishes the critical
+**Phase B order, as executed:** T-10 → T-12 → T-11 → T-13 → T-14 → T-14b.
+
+**Suggested order for Phase C:** T-15 → T-16 → T-18 → T-19, with T-17 and T-20 once T-15
+and T-16 land. T-18 (realistic data) is what makes every later model comparison meaningful. That finishes the critical
 path (T-12 and T-11 are its last two links) before the supporting work.
 
 **Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11. ✅ **Complete.**

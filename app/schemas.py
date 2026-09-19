@@ -36,6 +36,24 @@ class TransactionCreate(BaseModel):
     amount: float
     device_id: str
 
+class StepUpInfo(BaseModel):
+    """The step-up challenge on a STEP_UP transaction, if it has one."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    method: str
+    status: str
+    expires_at: datetime
+    attempts_remaining: int
+    # Development only (STEP_UP_DEV_ECHO=true), and only on the response that
+    # created the challenge. In production the code arrives out of band.
+    dev_code: str | None = None
+
+
+class StepUpVerify(BaseModel):
+    code: str = Field(min_length=1, max_length=16)
+
+
 class TransactionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -51,6 +69,7 @@ class TransactionResponse(BaseModel):
     policy_version: str | None = None
     model_version: str | None = None
     resolved_decision: str | None = None
+    step_up: StepUpInfo | None = None
     created_at: datetime
 
 # ── Claim ────────────────────────────────────────────────────────
