@@ -64,7 +64,7 @@ and its acceptance boxes ticked in §12.
 | T-07 · Monitoring ground truth | `935151b` | A3 |
 | T-08 · Correctness fix bundle | `2fedbef` | A10, A11, A12, A14 |
 | T-09 · Test infrastructure and rule coverage | `5cff5f0` | A17 |
-| T-10 · Role-based access control | `pending` | prerequisite for T-12 |
+| T-10 · Role-based access control | `b1e3e38` | prerequisite for T-12 |
 
 **Suite:** 288 tests, 98% coverage of `app/`, about 15 seconds.
 
@@ -1096,7 +1096,7 @@ engine = create_engine(
 
 ---
 
-#### T-10 · Role-based access control — ✅ DONE (`pending`)
+#### T-10 · Role-based access control — ✅ DONE (`b1e3e38`)
 
 **Depends on:** none
 **Fixes:** prerequisite for T-12
