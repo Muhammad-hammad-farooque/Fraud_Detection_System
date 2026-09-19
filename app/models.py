@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Index, Integer, Float, ForeignKey, String, DateTime, Boolean
+from sqlalchemy import JSON, Column, Index, Integer, Float, ForeignKey, String, DateTime, Boolean, event
 from enum import StrEnum
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -128,3 +128,50 @@ class Case(Base):
 
     transaction = relationship("Transaction", back_populates="case")
     claim = relationship("Claim")
+
+
+class DecisionAudit(Base):
+    """Immutable record of one scoring decision (design principle P6).
+
+    Holds everything needed to reproduce the decision from this row alone:
+    the full feature vector, every rule that fired with its weight, the model
+    output, and - beyond the original contract - the scoring and policy
+    parameters in force at the time. Rule weights and thresholds become
+    configurable in T-13, so replaying with today's settings would silently
+    produce a different answer.
+
+    Append-only. The ORM refuses updates and deletes below, and
+    migrations/004_decision_audits.sql adds a trigger that does the same in
+    PostgreSQL.
+    """
+    __tablename__ = "decision_audits"
+
+    id             = Column(Integer, primary_key=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=False, index=True)
+    feature_vector = Column(JSON, nullable=False)   # full input, for replay
+    rule_hits      = Column(JSON, nullable=False)   # [{rule_id, weight}, ...]
+    rule_score     = Column(Float, nullable=False)
+    model_prob     = Column(Float, nullable=False)
+    final_score    = Column(Float, nullable=False)
+    decision       = Column(String, nullable=False)
+    model_version  = Column(String, nullable=False)
+    policy_version = Column(String, nullable=False)
+    scoring_params = Column(JSON, nullable=False)   # {total_rule_weight, w_rules, w_model}
+    policy_config  = Column(JSON, nullable=False)   # thresholds in force
+    policy_context = Column(JSON, nullable=False)   # amount, tier, account age
+    created_at     = Column(DateTime(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+
+
+class AuditImmutableError(Exception):
+    """Raised on any attempt to modify or remove a DecisionAudit row."""
+
+
+@event.listens_for(DecisionAudit, "before_update")
+def _refuse_audit_update(mapper, connection, target):
+    raise AuditImmutableError("decision_audits is append-only; rows cannot be updated")
+
+
+@event.listens_for(DecisionAudit, "before_delete")
+def _refuse_audit_delete(mapper, connection, target):
+    raise AuditImmutableError("decision_audits is append-only; rows cannot be deleted")

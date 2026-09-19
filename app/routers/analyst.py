@@ -3,12 +3,13 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from .. import models, schemas
+from ..audit import replay
 from ..dependencies import get_db, require_analyst
 from ..models import CaseStatus
 from ..services import case_service
 from ..services.case_service import CaseError
 
-# Analyst routes read across every customer. T-11 adds the audit view here.
+# Analyst routes read across every customer.
 # The /v1 prefix arrives with T-27.
 router = APIRouter(
     prefix="/analyst",
@@ -27,6 +28,51 @@ def get_any_transaction(
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return transaction
+
+
+@router.get("/transactions/{transaction_id}/audit", response_model=List[schemas.AuditResponse])
+def get_transaction_audit(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    analyst: models.User = Depends(require_analyst)
+):
+    """The decision record for a transaction, each row replayed on the way out.
+
+    replay_matches says the stored row still reproduces its own score and
+    action; rules_still_agree says whether today's rules would fire the same
+    way on the same input.
+    """
+    if not db.query(models.Transaction).filter(models.Transaction.id == transaction_id).first():
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    audits = (
+        db.query(models.DecisionAudit)
+        .filter(models.DecisionAudit.transaction_id == transaction_id)
+        .order_by(models.DecisionAudit.created_at)
+        .all()
+    )
+    responses = []
+    for audit in audits:
+        result = replay(audit)
+        responses.append(schemas.AuditResponse(
+            id=audit.id,
+            transaction_id=audit.transaction_id,
+            feature_vector=audit.feature_vector,
+            rule_hits=audit.rule_hits,
+            rule_score=audit.rule_score,
+            model_prob=audit.model_prob,
+            final_score=audit.final_score,
+            decision=audit.decision,
+            model_version=audit.model_version,
+            policy_version=audit.policy_version,
+            scoring_params=audit.scoring_params,
+            policy_config=audit.policy_config,
+            policy_context=audit.policy_context,
+            created_at=audit.created_at,
+            replay_matches=result.matches,
+            rules_still_agree=result.rules_still_agree,
+        ))
+    return responses
 
 
 def _case_response(case: models.Case) -> schemas.CaseResponse:

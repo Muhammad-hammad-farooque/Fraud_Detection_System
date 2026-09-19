@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas
+from ..audit import record_decision
 from ..fraud_detection import score_transaction
 from ..dependencies import get_db, require_customer
 from ..policy import Decision, PolicyContext, decide, load_policy_config
@@ -25,7 +26,8 @@ def create_transaction(
     risk_score = breakdown.final_score
     risk_level = get_risk_level(risk_score)
     policy     = load_policy_config()
-    decision   = decide(risk_score, PolicyContext(amount=transaction.amount), policy)
+    context    = PolicyContext(amount=transaction.amount)
+    decision   = decide(risk_score, context, policy)
     predicted_fraud = decision == Decision.REJECT
 
     new_transaction = models.Transaction(
@@ -41,10 +43,12 @@ def create_transaction(
     )
 
     db.add(new_transaction)
+    # Flush for the id. The audit row, and the case for a REVIEW, go in the same
+    # database transaction: a decision without its audit record, or a REVIEW
+    # without a case, must never be persisted (P6, A13).
+    db.flush()
+    record_decision(db, new_transaction, breakdown, decision, policy, context)
     if decision == Decision.REVIEW:
-        # Flush for the id, then open the case in the same database transaction:
-        # a REVIEW decision without a case would be a dead end again (A13).
-        db.flush()
         open_case(db, new_transaction, CaseSource.POLICY_REVIEW)
     db.commit()
     db.refresh(new_transaction)

@@ -107,3 +107,23 @@ class OutcomeResponse(BaseModel):
     confirmed_by: int | None
     confirmed_at: datetime
     notes: str | None
+
+
+# ── Audit ────────────────────────────────────────────────────────
+class AuditResponse(BaseModel):
+    id: int
+    transaction_id: int
+    feature_vector: dict
+    rule_hits: list[dict]
+    rule_score: float
+    model_prob: float
+    final_score: float
+    decision: str
+    model_version: str
+    policy_version: str
+    scoring_params: dict
+    policy_config: dict
+    policy_context: dict
+    created_at: datetime
+    replay_matches: bool
+    rules_still_agree: bool

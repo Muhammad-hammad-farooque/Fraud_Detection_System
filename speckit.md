@@ -6,7 +6,7 @@
 | **Version** | 0.1.0 |
 | **Status** | Working prototype — not production ready. Phase A complete; Phase B in progress. |
 | **Last reviewed** | 2026-09-19 |
-| **Progress** | 11 / 34 tasks · 14 / 18 defects fixed, A13 half-fixed — see §1.4 |
+| **Progress** | 12 / 34 tasks · 14 / 18 defects fixed, A13 half-fixed — critical path complete — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -46,7 +46,7 @@ nobody wrote a rule for. This is the standard architecture in payments risk.
 | Customer | Submit transactions, see decisions, dispute them | Yes |
 | Fraud analyst | Review the manual-check queue, confirm fraud, tune rules | **Yes, via the API** (T-12) — no analyst UI yet, and rule tuning waits on T-13 |
 | Data scientist | Retrain, evaluate, monitor drift | Partially (scripts only) |
-| Auditor / regulator | Reconstruct why any decision was made | **No — not implemented** |
+| Auditor / regulator | Reconstruct why any decision was made | **Yes, via the API** (T-11) — every decision since T-11 replays bit-for-bit; earlier ones were never recorded |
 
 ### 1.4 Progress
 
@@ -66,8 +66,9 @@ and its acceptance boxes ticked in §12.
 | T-09 · Test infrastructure and rule coverage | `5cff5f0` | A17 |
 | T-10 · Role-based access control | `b1e3e38` | prerequisite for T-12 |
 | T-12 · Analyst case queue | `f50ea16` | A13 (REVIEW / MANUAL_REVIEW) |
+| T-11 · Immutable decision audit trail | `pending` | P6 |
 
-**Suite:** 324 tests, 99% coverage of `app/`, under 30 seconds.
+**Suite:** 346 tests, 99% coverage of `app/`, under a minute.
 
 **Still open:** A9 (weak training data, T-18), A13's `STEP_UP` half (T-14b, added during
 T-12), A15 (no idempotency, T-14), A18 (`networkx` unused — kept deliberately, T-17 uses it).
@@ -76,13 +77,20 @@ T-12), A15 (no idempotency, T-14), A18 (`networkx` unused — kept deliberately,
 which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs at least
 20 mature labels (90 days old) before it will train, so the loop turns slowly by design.
 
-**Next:** T-11 (audit trail) completes the critical path. T-13, T-14 and T-14b are also
-unblocked.
+**The critical path is complete** (T-01 → T-03 → T-04 → T-05 → T-12 → T-11). Every decision
+is now scored on one feature path, decided by a separate policy, recorded immutably, and —
+when it needs a human — routed to an analyst whose determination becomes a training label.
+
+**Next:** T-13 (model registry and config-driven rules) is the natural follow-on: the audit
+trail already stores the parameters T-13 makes configurable. T-14 and T-14b finish Phase B.
 
 **Carried debt, not yet a task:** schema changes land while `create_all()` is still the only
 deployment path, so `migrations/` holds hand-written DDL for databases created earlier —
-`001_phase_a_schema.sql`, `002_user_roles.sql` and `003_cases.sql` so far. `003` also opens a
-case for every transaction already sitting in REVIEW, so none stay dead ends. T-21 must baseline every file there
+`001` to `004` so far. `003` also opens a case for every transaction already sitting in
+REVIEW, so none stay dead ends. `004` adds a trigger that makes `decision_audits`
+append-only in PostgreSQL, and deliberately does *not* backfill audit rows for older
+transactions: their feature vectors were never stored, and a reconstructed record would look
+authoritative when it is not. T-21 must baseline every file there
 when it brings in Alembic.
 
 **Bootstrapping an admin:** the role endpoint needs an admin to call it, so the first one is
@@ -215,7 +223,7 @@ which is T-12.
 
 ### 3.5 Testing
 
-324 tests across 14 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
+346 tests across 15 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -491,9 +499,9 @@ it trains on its own predictions.
 | Class balance | 50 / 50 | ~0.5% fraud |
 | Scoring latency p99 | unmeasured, but O(1) in history since T-02 | < 100 ms, O(1) |
 | Recall at fixed 1% FPR | unmeasured | > 70% |
-| Label source | `TransactionOutcome` only, but nothing writes to it until T-12 | analyst confirmations + chargebacks |
-| Decision auditability | `ScoreBreakdown` carries the trace, nothing persists it until T-11 | full feature vector and rule trace per decision |
-| Manual review resolution | impossible | analyst queue with SLA |
+| Label source | analyst confirmations via T-12; chargeback ingestion not yet built | analyst confirmations + chargebacks |
+| Decision auditability | ✅ full feature vector, rule trace and parameters per decision, replayable (T-11) | full feature vector and rule trace per decision |
+| Manual review resolution | ✅ analyst queue with SLA (T-12), API only | analyst queue with SLA |
 | Deployment | `create_all()` on boot | Alembic migrations via CI |
 
 ---
@@ -506,11 +514,10 @@ If only a handful of changes are made, these carry the most signal:
 2. ~~**`TransactionOutcome`** — breaks the circular labelling that makes the ML loop meaningless~~ **Done, T-05**
 3. ~~**Fix score saturation** — the ML contribution is discarded when it matters most~~ **Done, T-03**
 4. ~~**SQL aggregates instead of `.all()`** — removes the hardest scalability limit~~ **Done, T-02**
-5. **Decision audit trail** (T-11) — the clearest signal of regulated-fintech experience
+5. ~~**Decision audit trail** — the clearest signal of regulated-fintech experience~~ **Done, T-11**
 6. **Graph features with `networkx`** (T-17) — the most technically impressive addition available
 
-The two that remain are the highest-leverage work left, together with **T-12**, which turns
-the table T-05 created into an actual supply of labels.
+Graph features (T-17) are the one that remains, and they need T-15's schema expansion first.
 
 ---
 
@@ -636,7 +643,7 @@ Not F1. The operating metrics are:
 | Calibrated probability | Raw uncalibrated `predict_proba` | T-19 |
 | Step-up auth as a third action | ~~Allow / review / reject only~~ STEP_UP shipped | ~~T-04~~ ✅ |
 | Chargeback and analyst labels | ~~Model's own output used as label~~ `TransactionOutcome`, unwritten until T-12 | ~~T-05~~ ✅ |
-| Full decision audit log | Nothing logged | T-11 |
+| Full decision audit log | ~~Nothing logged~~ append-only, replayable | ~~T-11~~ ✅ |
 | Graph and ring features | 1-hop device degree only | T-17 |
 | Multi-window velocity | Single 120-second window | T-16 |
 
@@ -655,7 +662,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 324 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 346 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -699,6 +706,12 @@ Decisions made while executing Phase A that later tasks must not silently undo.
 11. **Labels come from lifecycle endpoints, never direct writes.** An ANALYST outcome is
     written only by resolving a case, which refuses to overwrite an existing outcome of any
     source. Future label sources (chargeback ingestion, T-14b) follow the same rule.
+12. **Every decision is audited in its own database transaction.** `record_decision` runs
+    before the commit that saves the transaction, never after. Anything that changes how a
+    score is computed — a new rule, a new weight, a new policy input — must also land in
+    the audit row, or `replay()` stops reproducing it; `tests/test_audit.py` will fail if
+    it does. `replay()` proves consistency, not authenticity: tamper-evidence such as a
+    hash chain over rows is not yet built.
 
 ### 11.3 Definition of done
 
@@ -1134,7 +1147,7 @@ def require_role(*allowed: Role):
 
 ---
 
-#### T-11 · Immutable decision audit trail
+#### T-11 · Immutable decision audit trail — ✅ DONE (`pending`)
 
 **Depends on:** T-03, T-04
 **Fixes:** design principle P6
@@ -1160,13 +1173,19 @@ class DecisionAudit(Base):
     created_at     = Column(DateTime(timezone=True), nullable=False)
 ```
 
+**As built:** three more JSON columns — `scoring_params` (rule-weight total and the blend
+weights), `policy_config` (thresholds) and `policy_context` (amount, tier, account age).
+Without them a row replays against *today's* settings, which T-13 makes configurable, so
+"sufficient to replay exactly" would silently stop being true. The endpoint is served at
+`/analyst/...` until T-27 adds `/v1`.
+
 **Acceptance**
 
-- [ ] One audit row written for every scored transaction, in the same database transaction
-- [ ] Append-only — no update or delete path exists anywhere in the codebase
-- [ ] A stored audit row is sufficient to replay the decision exactly
-- [ ] `GET /v1/analyst/transactions/{id}/audit` exposes it to analysts only
-- [ ] Test asserting a replayed audit row reproduces the original score bit-for-bit
+- [x] One audit row written for every scored transaction, in the same database transaction
+- [x] Append-only — no update or delete path exists anywhere in the codebase
+- [x] A stored audit row is sufficient to replay the decision exactly
+- [x] `GET /v1/analyst/transactions/{id}/audit` exposes it to analysts only
+- [x] Test asserting a replayed audit row reproduces the original score bit-for-bit
 
 ---
 
@@ -1476,17 +1495,17 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
                    ├── ✅ T-07 monitor fix
                    └── ✅ T-12 case queue
 ✅ T-10 RBAC ─────────┘
-✅ T-03 + ✅ T-04 ── T-11 audit trail
+✅ T-03 + ✅ T-04 ── ✅ T-11 audit trail
    T-14 idempotency   (independent)
 ✅ T-04 ── T-14b step-up auth   (added during T-12)
    Phase D            (independent, can run in parallel throughout)
 ```
 
-**Unblocked right now:** T-11, T-13, T-14, T-14b, T-15.
+**Unblocked right now:** T-13, T-14, T-14b, T-15, and all of Phase D.
 
-**Suggested order for Phase B:** ~~T-10~~ → ~~T-12~~ → T-11 → T-13 → T-14 → T-14b. That finishes the critical
+**Suggested order for Phase B:** ~~T-10~~ → ~~T-12~~ → ~~T-11~~ → T-13 → T-14 → T-14b. That finishes the critical
 path (T-12 and T-11 are its last two links) before the supporting work.
 
-**Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11.
+**Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11. ✅ **Complete.**
 That sequence alone converts a scoring function into an auditable fraud platform with a
 working label feedback loop.
