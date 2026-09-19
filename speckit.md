@@ -68,7 +68,7 @@ and its acceptance boxes ticked in §12.
 | T-12 · Analyst case queue | `f50ea16` | A13 (REVIEW / MANUAL_REVIEW) |
 | T-11 · Immutable decision audit trail | `969e0f0` | P6 |
 | T-13 · Model registry and config-driven rules | `2d2550c` | — |
-| T-14 · Idempotency | `pending` | A15 |
+| T-14 · Idempotency | `fcbe145` | A15 |
 
 **Suite:** 416 tests, 99% coverage of `app/`, a little over a minute (four tests start the
 API in a subprocess to prove startup checks).
@@ -1289,7 +1289,7 @@ def load_model(version: str | None = None) -> tuple[Any, ModelManifest]:
 
 ---
 
-#### T-14 · Idempotency — ✅ DONE (`pending`)
+#### T-14 · Idempotency — ✅ DONE (`fcbe145`)
 
 **Depends on:** none
 **Fixes:** A15
