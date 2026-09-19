@@ -31,6 +31,8 @@ def record_decision(
     """
     if breakdown.feature_vector is None:
         raise ValueError("A decision cannot be audited without its feature vector")
+    if breakdown.scoring_params is None:
+        raise ValueError("A decision cannot be audited without the scoring parameters it used")
 
     audit = models.DecisionAudit(
         transaction_id=transaction.id,
@@ -42,11 +44,7 @@ def record_decision(
         decision=decision.value,
         model_version=breakdown.model_version,
         policy_version=policy_cfg.version,
-        scoring_params={
-            "total_rule_weight": scoring.TOTAL_RULE_WEIGHT,
-            "w_rules": scoring.W_RULES,
-            "w_model": scoring.W_MODEL,
-        },
+        scoring_params=dict(breakdown.scoring_params),
         policy_config=asdict(policy_cfg),
         policy_context=asdict(policy_ctx),
         created_at=now or datetime.now(timezone.utc),

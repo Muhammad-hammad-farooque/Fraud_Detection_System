@@ -2,11 +2,12 @@ import os
 import sys
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-import joblib
+from sklearn.metrics import roc_auc_score
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from app.features import FEATURE_ORDER
+from app.ML.registry import activate, save_model
 
 # Synthetic training data with meaningful fraud signals:
 # Features: amount, amount_deviation (ratio to user avg), is_new_location,
@@ -34,5 +35,16 @@ y = df["fraud"]
 model = RandomForestClassifier(n_estimators=100, random_state=42)
 model.fit(X, y)
 
-joblib.dump(model, "app/ML/model.pkl")
-print("Model trained and saved to app/ML/model.pkl")
+# Fit and scored on the same 20 rows, so this AUC says nothing about
+# generalisation - it is named in_sample_auc so no one mistakes it for a
+# holdout metric. T-18 replaces this data; T-19 the algorithm.
+in_sample_auc = roc_auc_score(y, model.predict_proba(X)[:, 1])
+
+manifest = save_model(
+    model,
+    algorithm="RandomForestClassifier",
+    training_rows=len(df),
+    metrics={"in_sample_auc": in_sample_auc},
+)
+activate(manifest.version)
+print(f"Model {manifest.version} trained, saved and activated")

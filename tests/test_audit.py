@@ -71,7 +71,7 @@ class TestRecording:
             "amount", "amount_deviation", "is_new_location", "is_flagged_device", "velocity_2m",
         }
         assert all(set(hit) == {"rule_id", "weight"} for hit in audit.rule_hits)
-        assert set(audit.scoring_params) == {"total_rule_weight", "w_rules", "w_model"}
+        assert set(audit.scoring_params) == {"rules_version", "total_rule_weight", "w_rules", "w_model"}
         assert {"allow_below", "step_up_below", "review_below", "high_value_amount"} <= set(audit.policy_config)
         assert audit.policy_context["amount"] == 9000.0
         assert audit.model_version
@@ -82,16 +82,15 @@ class TestRecording:
         from app.scoring import ScoreBreakdown
 
         blind = ScoreBreakdown(rule_hits=[], rule_score=0.0, model_probability=0.0,
-                               final_score=0.0, model_version="m", feature_vector=None)
+                               final_score=0.0, model_version="m", feature_vector=None,
+                               scoring_params={"w_rules": 0.7})
         with pytest.raises(ValueError, match="feature vector"):
             record_decision(db_session, models.Transaction(id=1), blind, Decision.ALLOW,
                             load_policy_config(), PolicyContext(amount=1.0))
 
-    def test_audit_and_transaction_commit_together(self, client, people, db_session, monkeypatch):
+    def test_audit_and_transaction_commit_together(self, client, people, db_session, monkeypatch,
+                                                  everything_reviews):
         """If anything after scoring fails, neither the decision nor its record survives."""
-        monkeypatch.setenv("POLICY_ALLOW_BELOW", "0")
-        monkeypatch.setenv("POLICY_STEP_UP_BELOW", "0")
-        monkeypatch.setenv("POLICY_REVIEW_BELOW", "1.01")
 
         def explode(*args, **kwargs):
             raise RuntimeError("case store unavailable")
@@ -132,14 +131,16 @@ class TestReplay:
             assert result.final_score == audit.final_score, audit.id
             assert result.decision.value == audit.decision, audit.id
 
-    def test_replay_uses_the_thresholds_in_force_at_the_time(self, client, people, db_session, monkeypatch):
+    def test_replay_uses_the_thresholds_in_force_at_the_time(self, client, people, db_session, rules_config):
         """Retuning the policy afterwards must not rewrite history."""
         txn = _pay(client, people, 100.0)
         assert txn["decision"] == "ALLOW"
 
-        monkeypatch.setenv("POLICY_ALLOW_BELOW", "0")
-        monkeypatch.setenv("POLICY_STEP_UP_BELOW", "0")
-        monkeypatch.setenv("POLICY_REVIEW_BELOW", "0")      # everything would now REJECT
+        # Everything would now REJECT, and every rule weighs differently.
+        rules_config(
+            policy={"allow_below": 0, "step_up_below": 0, "review_below": 0},
+            scoring={"w_rules": 0.5, "w_model": 0.5},
+        )
 
         result = replay(_audits(db_session, txn["id"])[0])
         assert result.decision.value == "ALLOW"

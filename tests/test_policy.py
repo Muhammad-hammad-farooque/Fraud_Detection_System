@@ -7,9 +7,7 @@ import pytest
 
 from app import policy
 from app.policy import (
-    HIGH_VALUE_TIGHTENING,
     TRUSTED_TIER,
-    TRUSTED_TIER_LOOSENING,
     Decision,
     PolicyConfig,
     PolicyContext,
@@ -56,12 +54,21 @@ class TestThresholds:
         assert cfg.review_below == 0.7
         assert cfg.version
 
-    def test_config_is_read_from_the_environment(self, monkeypatch):
-        monkeypatch.setenv("POLICY_ALLOW_BELOW", "0.42")
-        monkeypatch.setenv("POLICY_VERSION", "policy-from-env")
+    def test_bands_come_from_the_rules_file(self, rules_config):
+        rules_config(policy={"version": "policy-from-file", "allow_below": 0.42})
         cfg = load_policy_config()
         assert cfg.allow_below == 0.42
-        assert cfg.version == "policy-from-env"
+        assert cfg.version == "policy-from-file"
+
+    def test_multipliers_come_from_the_rules_file(self, rules_config):
+        rules_config(policy={"high_value_tightening": 0.5, "trusted_tier_loosening": 1.5})
+        cfg = load_policy_config()
+        assert (cfg.high_value_tightening, cfg.trusted_tier_loosening) == (0.5, 1.5)
+
+    def test_rows_written_before_the_multipliers_were_configurable_still_load(self):
+        """Pre-T-13 audit rows lack the multiplier fields; the defaults are the old constants."""
+        cfg = PolicyConfig("old", 0.3, 0.5, 0.7, 5000.0)
+        assert (cfg.high_value_tightening, cfg.trusted_tier_loosening) == (0.8, 1.2)
 
 
 class TestBusinessContext:
@@ -72,7 +79,7 @@ class TestBusinessContext:
         assert decide(score, LARGE, CFG) == Decision.STEP_UP
 
     def test_high_value_boundary_scales_by_the_documented_factor(self):
-        edge = CFG.allow_below * HIGH_VALUE_TIGHTENING
+        edge = CFG.allow_below * CFG.high_value_tightening
         assert decide(edge - 0.001, LARGE, CFG) == Decision.ALLOW
         assert decide(edge, LARGE, CFG) == Decision.STEP_UP
 
@@ -82,7 +89,7 @@ class TestBusinessContext:
         assert decide(score, TRUSTED, CFG) == Decision.ALLOW
 
     def test_trusted_boundary_scales_by_the_documented_factor(self):
-        edge = CFG.allow_below * TRUSTED_TIER_LOOSENING
+        edge = CFG.allow_below * CFG.trusted_tier_loosening
         assert decide(edge - 0.001, TRUSTED, CFG) == Decision.ALLOW
         assert decide(edge, TRUSTED, CFG) == Decision.STEP_UP
 
@@ -92,7 +99,7 @@ class TestBusinessContext:
 
     def test_high_value_trusted_customer_combines_both(self):
         ctx = PolicyContext(amount=9000.0, customer_tier=TRUSTED_TIER)
-        expected = CFG.allow_below * HIGH_VALUE_TIGHTENING * TRUSTED_TIER_LOOSENING
+        expected = CFG.allow_below * CFG.high_value_tightening * CFG.trusted_tier_loosening
         assert decide(expected - 0.001, ctx, CFG) == Decision.ALLOW
         assert decide(expected, ctx, CFG) == Decision.STEP_UP
 

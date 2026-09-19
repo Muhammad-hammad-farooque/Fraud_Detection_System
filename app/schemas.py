@@ -49,6 +49,7 @@ class TransactionResponse(BaseModel):
     risk_level: str
     decision: str
     policy_version: str | None = None
+    model_version: str | None = None
     resolved_decision: str | None = None
     created_at: datetime
 

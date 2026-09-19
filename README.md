@@ -61,7 +61,8 @@ fraud-detection-system/
 │   ├── ML/
 │   │   ├── train_model.py       # Model training script
 │   │   ├── models.py            # predict_fraud() inference function
-│   │   └── model.pkl            # Trained model artifact
+│   │   ├── registry.py          # Versioned models, each with a manifest
+│   │   └── artifacts/           # <version>/model.pkl + manifest.json, and ACTIVE
 │   └── routers/
 │       ├── auth.py              # /auth endpoints (register, login, me)
 │       ├── user_route.py        # /users endpoints
@@ -256,7 +257,7 @@ python -m scripts.retrain
 2. Recomputes features preserving temporal order (no data leakage)
 3. Trains a new RandomForestClassifier on an 80/20 train/test split
 4. Compares AUC-ROC of new model vs current deployed model
-5. Replaces `model.pkl` only if the new model wins (champion/challenger)
+5. Registers and activates the new model only if it wins (champion/challenger)
 
 All decisions are logged to `logs/retrain.log`.
 

@@ -11,7 +11,8 @@ import pytest
 
 from app import models
 from app.fraud_detection import calculate_risk, score_transaction
-from app.scoring import RULES, W_MODEL
+from app.config import get_rules_config
+from app.scoring import active_rules
 
 NOW = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -84,7 +85,7 @@ class TestEachRuleThroughTheFullPath:
             _seed_history(db_session, [(100.0, "Lahore", "shared", 3600)], user_id=user_id)
         _seed_history(db_session, [(100.0, "Lahore", "shared", 10)] * 5)
         hits = _hits(db_session, _candidate(amount=9000.0, location="Quetta", device_id="shared"))
-        assert hits == {rule.id for rule in RULES}
+        assert hits == {rule.id for rule in active_rules()}
 
 
 class TestBoundaries:
@@ -146,7 +147,8 @@ class TestScoreProperties:
             user_id=1, now=NOW,
         )
         assert breakdown.rule_score == pytest.approx(1.0)
-        assert breakdown.final_score == pytest.approx(1.0 - W_MODEL + W_MODEL * breakdown.model_probability)
+        w_model = get_rules_config().scoring.w_model
+        assert breakdown.final_score == pytest.approx(1.0 - w_model + w_model * breakdown.model_probability)
         assert breakdown.final_score <= 1.0
 
     def test_cold_start_user_is_not_penalised(self, db_session):

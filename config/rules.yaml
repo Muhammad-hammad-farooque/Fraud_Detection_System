@@ -1,0 +1,43 @@
+# Rule weights and policy thresholds for the fraud engine (T-13).
+#
+# Edit this file to retune: the API reloads it when it changes, no restart or
+# deploy needed. A malformed file stops the API at startup; a malformed edit
+# while running is rejected and the last good configuration stays in force.
+#
+# Rule logic lives in app/scoring.py. This file only sets how much each rule
+# counts and where its threshold sits. Rule ids are stable: the audit trail
+# stores them, so renaming one is a schema change.
+
+version: rules-1
+
+scoring:
+  # Share of the final score owned by the rules and by the model. Must sum to 1,
+  # which is what keeps the score in [0, 1] without clamping.
+  w_rules: 0.7
+  w_model: 0.3
+
+  rules:
+    R1_HIGH_AMOUNT:
+      weight: 0.25
+      threshold: 5000        # amount above this fires
+    R2_AMOUNT_DEVIATION:
+      weight: 0.25
+      threshold: 3.0         # amount this many times the user's average fires
+    R3_NEW_LOCATION:
+      weight: 0.2
+    R4_FLAGGED_DEVICE:
+      weight: 0.3
+    R5_VELOCITY:
+      weight: 0.5
+      threshold: 5           # this many transactions in the last 2 minutes fires
+
+# Adding or reweighting a rule changes the total rule weight and so rescales
+# every score. Retune these bands in the same change.
+policy:
+  version: policy-1
+  allow_below: 0.3
+  step_up_below: 0.5
+  review_below: 0.7
+  high_value_amount: 5000
+  high_value_tightening: 0.8    # multiplies every band on high-value amounts
+  trusted_tier_loosening: 1.2   # multiplies every band for trusted customers

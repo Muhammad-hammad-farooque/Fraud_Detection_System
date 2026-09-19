@@ -40,6 +40,7 @@ def create_transaction(
         risk_level=risk_level,
         decision=decision.value,
         policy_version=policy.version,
+        model_version=breakdown.model_version,
     )
 
     db.add(new_transaction)

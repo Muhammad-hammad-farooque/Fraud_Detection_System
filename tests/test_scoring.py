@@ -6,17 +6,21 @@ import random
 import pytest
 
 from app.features import FeatureVector
+from app.config import get_rules_config
 from app.scoring import (
-    RULES,
-    TOTAL_RULE_WEIGHT,
-    W_MODEL,
-    W_RULES,
     RuleHit,
+    active_rules,
     combine,
     evaluate_rules,
     normalised_rule_score,
     score,
+    total_rule_weight,
 )
+
+
+def _weights():
+    scoring = get_rules_config().scoring
+    return scoring.w_rules, scoring.w_model
 
 QUIET = FeatureVector(
     amount=100.0,
@@ -55,7 +59,7 @@ class TestEvaluateRules:
         assert evaluate_rules(QUIET) == []
 
     def test_every_rule_fires_on_a_loud_transaction(self):
-        assert _ids(evaluate_rules(LOUD)) == [rule.id for rule in RULES]
+        assert _ids(evaluate_rules(LOUD)) == [rule.id for rule in active_rules()]
 
     @pytest.mark.parametrize("rule_id", list(SINGLE_RULE_VECTORS))
     def test_each_rule_fires_alone(self, rule_id):
@@ -63,7 +67,7 @@ class TestEvaluateRules:
 
     def test_every_rule_has_a_single_rule_vector(self):
         """Guards against a rule being added without a test."""
-        assert set(SINGLE_RULE_VECTORS) == {rule.id for rule in RULES}
+        assert set(SINGLE_RULE_VECTORS) == {rule.id for rule in active_rules()}
 
     @pytest.mark.parametrize("amount, fires", [(4999.99, False), (5000.0, False), (5000.01, True)])
     def test_high_amount_boundary(self, amount, fires):
@@ -85,7 +89,8 @@ class TestEvaluateRules:
 
 class TestCombine:
     def test_weights_split_the_whole_score(self):
-        assert W_RULES + W_MODEL == pytest.approx(1.0)
+        w_rules, w_model = _weights()
+        assert w_rules + w_model == pytest.approx(1.0)
 
     def test_nothing_fires_and_model_is_certain_it_is_clean(self):
         assert combine([], 0.0) == pytest.approx(0.0)
@@ -95,12 +100,13 @@ class TestCombine:
 
     def test_rule_score_is_normalised_by_total_weight(self):
         hits = evaluate_rules(SINGLE_RULE_VECTORS["R5_VELOCITY"])
-        assert normalised_rule_score(hits) == pytest.approx(0.5 / TOTAL_RULE_WEIGHT)
+        assert normalised_rule_score(hits) == pytest.approx(0.5 / total_rule_weight())
 
     def test_model_contribution_survives_every_rule_firing(self):
         """A5: with all rules fired, the model must still move the score."""
         all_hits = evaluate_rules(LOUD)
-        assert combine(all_hits, 1.0) - combine(all_hits, 0.0) == pytest.approx(W_MODEL)
+        _, w_model = _weights()
+        assert combine(all_hits, 1.0) - combine(all_hits, 0.0) == pytest.approx(w_model)
 
     @pytest.mark.parametrize("rule_id", list(SINGLE_RULE_VECTORS))
     def test_model_contribution_survives_at_every_hit_count(self, rule_id):
@@ -136,10 +142,11 @@ class TestCombine:
 class TestScoreBreakdown:
     def test_breakdown_carries_the_full_trace(self):
         breakdown = score(LOUD, 0.9, "test-model-1")
-        assert _ids(breakdown.rule_hits) == [rule.id for rule in RULES]
+        assert _ids(breakdown.rule_hits) == [rule.id for rule in active_rules()]
         assert breakdown.rule_score == pytest.approx(1.0)
         assert breakdown.model_probability == 0.9
-        assert breakdown.final_score == pytest.approx(W_RULES + W_MODEL * 0.9)
+        w_rules, w_model = _weights()
+        assert breakdown.final_score == pytest.approx(w_rules + w_model * 0.9)
         assert breakdown.model_version == "test-model-1"
         assert breakdown.feature_vector == LOUD
 
@@ -151,3 +158,34 @@ class TestScoreBreakdown:
             breakdown.model_probability,
         )
         assert replayed == breakdown.final_score
+
+
+class TestRulesFromConfig:
+    """T-13: weights and thresholds come from config/rules.yaml, not from code."""
+
+    def test_threshold_change_needs_no_code_change(self, rules_config):
+        just_above = FeatureVector(4001.0, 1.0, 0, 0, 0)
+        assert evaluate_rules(just_above) == []
+        rules_config(scoring={"rules": {"R1_HIGH_AMOUNT": {"weight": 0.25, "threshold": 4000}}})
+        assert [h.rule_id for h in evaluate_rules(just_above)] == ["R1_HIGH_AMOUNT"]
+
+    def test_weight_change_rescales_the_rule_score(self, rules_config):
+        hits_before = evaluate_rules(SINGLE_RULE_VECTORS["R5_VELOCITY"])
+        before = normalised_rule_score(hits_before)
+        rules_config(scoring={"rules": {"R5_VELOCITY": {"weight": 1.0, "threshold": 5}}})
+        after = normalised_rule_score(evaluate_rules(SINGLE_RULE_VECTORS["R5_VELOCITY"]))
+        assert after > before
+
+    def test_blend_weights_come_from_config(self, rules_config):
+        rules_config(scoring={"w_rules": 0.4, "w_model": 0.6})
+        assert combine([], 1.0) == pytest.approx(0.6)
+
+    def test_breakdown_records_the_parameters_it_used(self, rules_config):
+        rules_config(version="rules-test", scoring={"w_rules": 0.4, "w_model": 0.6})
+        breakdown = score(LOUD, 0.5, "m")
+        assert breakdown.scoring_params == {
+            "rules_version": "rules-test",
+            "total_rule_weight": pytest.approx(1.5),
+            "w_rules": 0.4,
+            "w_model": 0.6,
+        }

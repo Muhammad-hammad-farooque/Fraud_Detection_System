@@ -1,15 +1,15 @@
-import os
+"""Serving-side inference over the active registered model.
 
-import joblib
-
+The active model is loaded once, when the API starts. load_model refuses to
+return a model whose feature order differs from FEATURE_ORDER, so a skewed
+model stops the API at startup rather than scoring silently wrong. Activating
+a different version takes effect on the next restart.
+"""
 from ..features import FeatureVector
+from .registry import load_model
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.pkl")
-model = joblib.load(MODEL_PATH)
-
-# Placeholder until the model registry lands (T-13): model.pkl carries no
-# version, training date or metrics of its own.
-MODEL_VERSION = "rf-baseline-unversioned"
+model, MANIFEST = load_model()
+MODEL_VERSION = MANIFEST.version
 
 
 def predict_fraud(fv: FeatureVector) -> tuple[int, float]:

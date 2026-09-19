@@ -25,14 +25,6 @@ def _account(client, db, email, role="CUSTOMER"):
 
 
 @pytest.fixture
-def everything_reviews(monkeypatch):
-    """Widen the REVIEW band to cover every score, via the policy's own config."""
-    monkeypatch.setenv("POLICY_ALLOW_BELOW", "0")
-    monkeypatch.setenv("POLICY_STEP_UP_BELOW", "0")
-    monkeypatch.setenv("POLICY_REVIEW_BELOW", "1.01")
-
-
-@pytest.fixture
 def people(client, db_session):
     return {
         "customer": _account(client, db_session, "customer@bank.com"),

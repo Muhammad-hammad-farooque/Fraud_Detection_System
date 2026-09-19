@@ -3,7 +3,7 @@ Retraining Pipeline
 -------------------
 Loads labeled transactions from the database, recomputes features,
 trains a new RandomForest model, evaluates it against the current
-deployed model, and replaces model.pkl only if the new model wins.
+deployed model, and registers and activates the new model only if it wins.
 
 Usage:
     python -m scripts.retrain
@@ -12,7 +12,6 @@ Usage:
 import os
 import sys
 from dataclasses import asdict
-import joblib
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
@@ -27,8 +26,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.database import SessionLocal
 from app import models
 from app.features import FEATURE_ORDER, aggregates_from_history, compute_features
+from app.ML.registry import RegistryError, activate, load_model, save_model
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "ML", "model.pkl")
 LOG_PATH   = os.path.join(os.path.dirname(__file__), "..", "logs", "retrain.log")
 
 
@@ -202,8 +201,10 @@ def run():
             log("Chronological split left one side empty. Exiting.")
             return
 
-        X_train, y_train = train_df[FEATURE_ORDER].values, train_df["fraud"].values
-        X_test, y_test = test_df[FEATURE_ORDER].values, test_df["fraud"].values
+        # DataFrames, not arrays: the model keeps its feature names, which the
+        # registry checks against FEATURE_ORDER before it will store or load it.
+        X_train, y_train = train_df[FEATURE_ORDER], train_df["fraud"].values
+        X_test, y_test = test_df[FEATURE_ORDER], test_df["fraud"].values
         log(f"Train size: {len(X_train)}  ({_date_range(train_df)})")
         log(f"Test  size: {len(X_test)}  ({_date_range(test_df)})")
 
@@ -216,22 +217,26 @@ def run():
         new_model.fit(X_train, y_train)
         new_auc = evaluate(new_model, X_test, y_test, "New Model")
 
-        # ── 6. Evaluate current deployed model ────────────────────
-        if os.path.exists(MODEL_PATH):
-            old_model = joblib.load(MODEL_PATH)
-            try:
-                old_auc = evaluate(old_model, X_test, y_test, "Current Model")
-            except Exception:
-                log("Current model could not be evaluated (feature mismatch?). Replacing.")
-                old_auc = 0.0
-        else:
-            log("No existing model.pkl found. Deploying new model directly.")
+        # ── 6. Evaluate the active model on the same test window ──
+        try:
+            old_model, old_manifest = load_model()
+            log(f"Active model: {old_manifest.version}")
+            old_auc = evaluate(old_model, X_test, y_test, "Current Model")
+        except RegistryError as exc:
+            log(f"No loadable active model ({exc}). The challenger wins by default.")
             old_auc = 0.0
 
         # ── 7. Champion / challenger decision ─────────────────────
         if new_auc > old_auc:
-            joblib.dump(new_model, MODEL_PATH)
-            log(f"New model deployed. AUC {new_auc:.4f} > {old_auc:.4f}")
+            manifest = save_model(
+                new_model,
+                algorithm="RandomForestClassifier",
+                training_rows=len(train_df),
+                metrics={"auc": new_auc, "test_rows": len(test_df), "champion_auc": old_auc},
+            )
+            activate(manifest.version)
+            log(f"New model {manifest.version} registered and activated. "
+                f"AUC {new_auc:.4f} > {old_auc:.4f}. Restart the API to serve it.")
         else:
             log(f"Current model retained. New AUC {new_auc:.4f} <= current {old_auc:.4f}")
 

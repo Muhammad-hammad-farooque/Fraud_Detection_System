@@ -1,0 +1,16 @@
+{
+  "algorithm": "RandomForestClassifier",
+  "feature_order": [
+    "amount",
+    "amount_deviation",
+    "is_new_location",
+    "is_flagged_device",
+    "velocity_2m"
+  ],
+  "metrics": {
+    "in_sample_auc": 1.0
+  },
+  "trained_at": "2026-09-19T11:09:54.746446+00:00",
+  "training_rows": 20,
+  "version": "randomforestclassifier-20260919T110954746446Z"
+}

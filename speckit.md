@@ -6,7 +6,7 @@
 | **Version** | 0.1.0 |
 | **Status** | Working prototype — not production ready. Phase A complete; Phase B in progress. |
 | **Last reviewed** | 2026-09-19 |
-| **Progress** | 12 / 34 tasks · 14 / 18 defects fixed, A13 half-fixed — critical path complete — see §1.4 |
+| **Progress** | 13 / 34 tasks · 14 / 18 defects fixed, A13 half-fixed — critical path complete — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -44,8 +44,8 @@ nobody wrote a rule for. This is the standard architecture in payments risk.
 | Role | Needs | Currently supported |
 |---|---|---|
 | Customer | Submit transactions, see decisions, dispute them | Yes |
-| Fraud analyst | Review the manual-check queue, confirm fraud, tune rules | **Yes, via the API** (T-12) — no analyst UI yet, and rule tuning waits on T-13 |
-| Data scientist | Retrain, evaluate, monitor drift | Partially (scripts only) |
+| Fraud analyst | Review the manual-check queue, confirm fraud, tune rules | **Yes** — cases via the API (T-12), rules by editing `config/rules.yaml` (T-13); no analyst UI yet |
+| Data scientist | Retrain, evaluate, monitor drift | Partially — scripts, plus a versioned model registry (T-13); no drift monitoring |
 | Auditor / regulator | Reconstruct why any decision was made | **Yes, via the API** (T-11) — every decision since T-11 replays bit-for-bit; earlier ones were never recorded |
 
 ### 1.4 Progress
@@ -67,8 +67,10 @@ and its acceptance boxes ticked in §12.
 | T-10 · Role-based access control | `b1e3e38` | prerequisite for T-12 |
 | T-12 · Analyst case queue | `f50ea16` | A13 (REVIEW / MANUAL_REVIEW) |
 | T-11 · Immutable decision audit trail | `969e0f0` | P6 |
+| T-13 · Model registry and config-driven rules | `pending` | — |
 
-**Suite:** 346 tests, 99% coverage of `app/`, under a minute.
+**Suite:** 392 tests, 99% coverage of `app/`, a little over a minute (four tests start the
+API in a subprocess to prove startup checks).
 
 **Still open:** A9 (weak training data, T-18), A13's `STEP_UP` half (T-14b, added during
 T-12), A15 (no idempotency, T-14), A18 (`networkx` unused — kept deliberately, T-17 uses it).
@@ -81,12 +83,15 @@ which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs
 is now scored on one feature path, decided by a separate policy, recorded immutably, and —
 when it needs a human — routed to an analyst whose determination becomes a training label.
 
-**Next:** T-13 (model registry and config-driven rules) is the natural follow-on: the audit
-trail already stores the parameters T-13 makes configurable. T-14 and T-14b finish Phase B.
+**Next:** T-14 (idempotency) and T-14b (step-up flow) finish Phase B. T-15 opens Phase C.
+
+**Retuning:** edit `config/rules.yaml`. It is validated before use and picked up on the next
+request. The first version is `rules-1` / `policy-1`, which reproduces the pre-T-13 numbers
+exactly — a test pins that.
 
 **Carried debt, not yet a task:** schema changes land while `create_all()` is still the only
 deployment path, so `migrations/` holds hand-written DDL for databases created earlier —
-`001` to `004` so far. `003` also opens a case for every transaction already sitting in
+`001` to `005` so far. `003` also opens a case for every transaction already sitting in
 REVIEW, so none stay dead ends. `004` adds a trigger that makes `decision_audits`
 append-only in PostgreSQL, and deliberately does *not* backfill audit rows for older
 transactions: their feature vectors were never stored, and a reconstructed record would look
@@ -150,7 +155,8 @@ POST /transactions/
 | Business logic | `app/services/fraud_services.py`, `app/policy.py` | Risk banding, device fraud, claim verification; policy maps score to action |
 | Features | `app/features.py` | Single pure feature computation path shared by serving and training |
 | Scoring engine | `app/scoring.py`, `app/fraud_detection.py` | Rule evaluation, score aggregation, `ScoreBreakdown` |
-| Inference | `app/ML/models.py` | Loads `model.pkl`, takes a `FeatureVector`, returns `(prediction, probability)` |
+| Inference | `app/ML/models.py`, `app/ML/registry.py` | Loads the active registered model, verifies its feature order, takes a `FeatureVector`, returns `(prediction, probability)` |
+| Configuration | `app/config.py`, `config/rules.yaml` | Rule weights and thresholds, blend weights, policy bands — validated, hot-reloaded |
 | Persistence | `app/models.py`, `app/database.py`, `app/repositories/` | ORM entities, engine, session, bounded scoring reads |
 | Auth | `app/auth.py`, `app/dependencies.py` | JWT issue/decode, bcrypt hashing, `get_current_user` |
 | Contracts | `app/schemas.py` | Pydantic v2 request/response models |
@@ -223,7 +229,7 @@ which is T-12.
 
 ### 3.5 Testing
 
-346 tests across 15 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
+392 tests across 17 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -346,8 +352,8 @@ because the columns do not exist. Add: `merchant_id`, `merchant_category`, `curr
 | **Decision audit trail** | Immutable record of every rule that fired, its contribution, the full feature vector, model version and final score. A regulatory requirement, not a nicety. |
 | **Reason codes** | Human-readable adverse-action explanations on every REJECT |
 | **SHAP explainability** | Per-decision attributions, stored with the audit record |
-| **Model registry** | `model.pkl` has no version, training date, feature schema or metrics. Stamp `model_version` on every decision. |
-| **Config-driven thresholds** | `5000`, `0.4`, `0.3/0.7` are hardcoded. Risk teams retune weekly; that cannot require a deploy. |
+| ~~**Model registry**~~ **Done, T-13** | `model.pkl` has no version, training date, feature schema or metrics. Stamp `model_version` on every decision. |
+| ~~**Config-driven thresholds**~~ **Done, T-13** | `5000`, `0.4`, `0.3/0.7` are hardcoded. Risk teams retune weekly; that cannot require a deploy. |
 | **Blocklists / allowlists** | Known-bad devices and locations; trusted-customer bypass |
 | **Chargeback ingestion** | The authoritative fraud label source in payments |
 | **Idempotency keys** | Payment systems retry (defect A15) |
@@ -662,7 +668,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 346 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 392 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -677,11 +683,14 @@ Decisions made while executing Phase A that later tasks must not silently undo.
    the caller: `transaction_repo.get_user_aggregates` when serving, `aggregates_from_history`
    when training. T-16 adds features to the same function, never around it.
 2. **Rule weights are normalised, never clamped.** `final_score` is in [0, 1] because
-   `W_RULES + W_MODEL == 1.0`, not because of a `min()`. Adding a rule changes
-   `TOTAL_RULE_WEIGHT` and therefore rescales every existing score — retune the policy
-   thresholds in the same task, and say so.
+   `w_rules + w_model == 1.0` — which `config/rules.yaml` validation enforces — not because
+   of a `min()`. Changing any rule weight changes the total and therefore rescales every
+   score: retune the policy bands in the same edit, and bump both `version` fields.
 3. **Rules are named.** Every rule carries a stable `id` such as `R4_FLAGGED_DEVICE`, because
-   the audit trail in T-11 stores those ids. Renaming one is a schema change to the audit log.
+   the audit trail stores those ids and `config/rules.yaml` is keyed by them. Renaming one is
+   a schema change to both. A new rule needs its logic in `app/scoring.py`, its id in
+   `app/config.py`'s `KNOWN_RULE_IDS`, and its weight in the YAML — the loader refuses any
+   mismatch.
 4. **Scoring never names an action.** `app/scoring.py` must not contain ALLOW, REVIEW,
    STEP_UP, REJECT or a threshold; `app/policy.py` must not compute a feature. A test in
    `tests/test_policy.py` enforces both directions.
@@ -712,6 +721,13 @@ Decisions made while executing Phase A that later tasks must not silently undo.
     the audit row, or `replay()` stops reproducing it; `tests/test_audit.py` will fail if
     it does. `replay()` proves consistency, not authenticity: tamper-evidence such as a
     hash chain over rows is not yet built.
+13. **Scoring reads one config snapshot per decision.** `score()` takes the config once and
+    threads it through every rule and the blend, so a reload mid-request cannot mix two
+    versions of the file. The snapshot's parameters go into `ScoreBreakdown.scoring_params`
+    and from there into the audit row.
+14. **No model is served without its manifest.** Train on a DataFrame with `FEATURE_ORDER`
+    columns, save through `app/ML/registry.py`, activate explicitly. Never write a
+    `model.pkl` by hand; the registry will refuse to load it.
 
 ### 11.3 Definition of done
 
@@ -1219,7 +1235,7 @@ POST  /v1/analyst/cases/{id}/resolve    body: {is_fraud_confirmed: bool, notes: 
 
 ---
 
-#### T-13 · Model registry and config-driven rules
+#### T-13 · Model registry and config-driven rules — ✅ DONE (`pending`)
 
 **Depends on:** T-03
 **Create:** `app/ML/registry.py`, `config/rules.yaml`
@@ -1242,14 +1258,28 @@ def load_model(version: str | None = None) -> tuple[Any, ModelManifest]:
     train/serve skew tripwire."""
 ```
 
+**As built:**
+
+- Models live in `app/ML/artifacts/<version>/` with `model.pkl` and `manifest.json`, and
+  `artifacts/ACTIVE` names the version serving traffic. Versions are immutable; a model
+  that fails the feature-order check can be neither saved nor activated.
+- The tripwire checks both the manifest *and* the fitted model's `feature_names_in_`, so a
+  hand-swapped `model.pkl` is caught too. A model fitted on a bare array is refused.
+- `config/rules.yaml` holds rule weights and thresholds, the blend weights, and the policy
+  bands and multipliers. Rule *logic* stays in `app/scoring.py`. The file is reloaded when
+  it changes; an edit that fails validation is rejected and the last good version stays in
+  force, so a typo during a retune cannot stop payments.
+- The environment-variable thresholds from T-04 are gone: one source of truth.
+- Activating a new model takes effect on the next API restart; config changes do not need one.
+
 **Acceptance**
 
-- [ ] Every saved model has a manifest written beside it
-- [ ] Loading refuses to proceed on a feature-order mismatch
-- [ ] `model_version` stamped on every decision and audit row
-- [ ] Rule weights and policy thresholds load from `config/rules.yaml`
-- [ ] Changing a threshold requires no code change
-- [ ] Config schema validated on startup — malformed config fails fast, not at first request
+- [x] Every saved model has a manifest written beside it
+- [x] Loading refuses to proceed on a feature-order mismatch
+- [x] `model_version` stamped on every decision and audit row
+- [x] Rule weights and policy thresholds load from `config/rules.yaml`
+- [x] Changing a threshold requires no code change
+- [x] Config schema validated on startup — malformed config fails fast, not at first request
 
 ---
 
@@ -1486,7 +1516,7 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
 ✅ T-01 features.py ──┬── ✅ T-02 SQL aggregates
                       ├── ✅ T-03 scoring ──┬── ✅ T-04 policy ──┐
                       │                     ├── ✅ T-09 tests    │
-                      │                     └──    T-13 registry │
+                      │                     └── ✅ T-13 registry │
                       └── ✅ T-08 fix bundle ──   T-15 schema ────┼── T-16 features+
                                                                   │   └── T-18 data ── T-19 LightGBM
                                                                   │   └── T-20 anomaly
@@ -1501,9 +1531,9 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
    Phase D            (independent, can run in parallel throughout)
 ```
 
-**Unblocked right now:** T-13, T-14, T-14b, T-15, and all of Phase D.
+**Unblocked right now:** T-14, T-14b, T-15, and all of Phase D.
 
-**Suggested order for Phase B:** ~~T-10~~ → ~~T-12~~ → ~~T-11~~ → T-13 → T-14 → T-14b. That finishes the critical
+**Suggested order for Phase B:** ~~T-10~~ → ~~T-12~~ → ~~T-11~~ → ~~T-13~~ → T-14 → T-14b. That finishes the critical
 path (T-12 and T-11 are its last two links) before the supporting work.
 
 **Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11. ✅ **Complete.**

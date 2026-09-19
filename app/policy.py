@@ -4,12 +4,13 @@ Contains no feature or risk computation - it only reads the score that
 app/scoring.py produced. Keeping the two apart means thresholds can be retuned
 without revalidating or redeploying the model (design principle P1), and it is
 what makes STEP_UP possible as a real action rather than a second reject (P4).
+
+Bands come from the policy section of config/rules.yaml (T-13).
 """
-import os
 from dataclasses import dataclass
 from enum import StrEnum
 
-POLICY_VERSION = "policy-1"
+from .config import get_rules_config
 
 
 class Decision(StrEnum):
@@ -34,37 +35,37 @@ class PolicyConfig:
     step_up_below: float
     review_below: float
     high_value_amount: float   # above this, thresholds tighten
+    # Multipliers applied to every band. Below 1.0 the bands shift down, so the
+    # same score lands on a stricter action. The defaults are the values in force
+    # before T-13 made them configurable, so audit rows written before then still
+    # replay exactly.
+    high_value_tightening: float = 0.8
+    trusted_tier_loosening: float = 1.2
 
 
-# Multipliers applied to every threshold. Below 1.0 the bands shift down, so
-# the same score lands on a stricter action.
-HIGH_VALUE_TIGHTENING = 0.8
-TRUSTED_TIER_LOOSENING = 1.2
 TRUSTED_TIER = "trusted"
 
 
 def load_policy_config() -> PolicyConfig:
-    """Read thresholds from the environment, defaulting to the original bands.
-
-    0.3 and 0.7 are preserved as the ALLOW and REJECT boundaries; the old
-    single MANUAL_CHECK band between them is split into STEP_UP and REVIEW.
-    T-13 moves this to config/rules.yaml.
-    """
+    """The policy section of config/rules.yaml, as currently loaded."""
+    section = get_rules_config().policy
     return PolicyConfig(
-        version=os.getenv("POLICY_VERSION", POLICY_VERSION),
-        allow_below=float(os.getenv("POLICY_ALLOW_BELOW", "0.3")),
-        step_up_below=float(os.getenv("POLICY_STEP_UP_BELOW", "0.5")),
-        review_below=float(os.getenv("POLICY_REVIEW_BELOW", "0.7")),
-        high_value_amount=float(os.getenv("POLICY_HIGH_VALUE_AMOUNT", "5000")),
+        version=section.version,
+        allow_below=section.allow_below,
+        step_up_below=section.step_up_below,
+        review_below=section.review_below,
+        high_value_amount=section.high_value_amount,
+        high_value_tightening=section.high_value_tightening,
+        trusted_tier_loosening=section.trusted_tier_loosening,
     )
 
 
 def _multiplier(ctx: PolicyContext, cfg: PolicyConfig) -> float:
     multiplier = 1.0
     if ctx.amount >= cfg.high_value_amount:
-        multiplier *= HIGH_VALUE_TIGHTENING
+        multiplier *= cfg.high_value_tightening
     if ctx.customer_tier == TRUSTED_TIER:
-        multiplier *= TRUSTED_TIER_LOOSENING
+        multiplier *= cfg.trusted_tier_loosening
     return multiplier
 
 
