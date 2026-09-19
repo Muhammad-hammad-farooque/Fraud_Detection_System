@@ -69,7 +69,7 @@ and its acceptance boxes ticked in §12.
 | T-11 · Immutable decision audit trail | `969e0f0` | P6 |
 | T-13 · Model registry and config-driven rules | `2d2550c` | — |
 | T-14 · Idempotency | `fcbe145` | A15 |
-| T-14b · Step-up authentication flow | `pending` | A13 (`STEP_UP`) |
+| T-14b · Step-up authentication flow | `25c6a57` | A13 (`STEP_UP`) |
 
 **Suite:** 443 tests, 99% coverage of `app/`, about a minute and a half (four tests start
 the API in a subprocess to prove startup checks).
@@ -1330,7 +1330,7 @@ def load_model(version: str | None = None) -> tuple[Any, ModelManifest]:
 
 ---
 
-#### T-14b · Step-up authentication flow — ✅ DONE (`pending`)
+#### T-14b · Step-up authentication flow — ✅ DONE (`25c6a57`)
 
 **Depends on:** T-04
 **Fixes:** A13 (the `STEP_UP` half)
