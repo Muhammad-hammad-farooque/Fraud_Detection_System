@@ -6,7 +6,7 @@
 | **Version** | 0.1.0 |
 | **Status** | Working prototype — not production ready. Phases A and B complete. |
 | **Last reviewed** | 2026-09-19 |
-| **Progress** | 18 / 34 tasks · 17 / 18 defects fixed — Phases A and B complete, C under way — see §1.4 |
+| **Progress** | 19 / 34 tasks · 16 / 18 defects fixed (A10, A18 open) — Phases A and B complete, C under way — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -62,7 +62,7 @@ and its acceptance boxes ticked in §12.
 | T-05 · Ground-truth outcomes | `aa35915` | A1, A4 |
 | T-06 · Chronological split and label maturity | `38d2968` | A2 |
 | T-07 · Monitoring ground truth | `935151b` | A3 |
-| T-08 · Correctness fix bundle | `2fedbef` | A10, A11, A12, A14 |
+| T-08 · Correctness fix bundle | `2fedbef` | A11, A12, A14 (A10 documented, not fixed — see below) |
 | T-09 · Test infrastructure and rule coverage | `5cff5f0` | A17 |
 | T-10 · Role-based access control | `b1e3e38` | prerequisite for T-12 |
 | T-12 · Analyst case queue | `f50ea16` | A13 (REVIEW / MANUAL_REVIEW) |
@@ -73,12 +73,17 @@ and its acceptance boxes ticked in §12.
 | T-15 · Expand the transaction schema | `2a847d1` | prerequisite for T-16, T-17 |
 | T-16 · Feature expansion (retraining moved to T-18) | `05d6902` | two training bugs from T-05 |
 | T-18 · Realistic training data, model retrained on 42 features | `0678d1a` | A9 |
+| T-19 · LightGBM with calibration (built; not promoted — a tie) | `pending` | — |
 
 **Suite:** 606 tests plus 1 expected failure (strict amount monotonicity, for T-19), about
 three minutes: two modules generate and train on real data, and four tests start the API in
 a subprocess to prove startup checks.
 
-**Still open:** A18 only (`networkx` unused — kept deliberately, T-17 uses it).
+**Still open:** A10 — the served probability is uncalibrated, because calibrated LightGBM
+(T-19) tied the forest and the gate kept the forest; and A18 (`networkx` unused — kept
+deliberately, T-17 uses it). **Correction:** A10 was counted as fixed from Phase A until
+T-19. T-08 only documented it, and the defect row itself was never struck. The count was one
+too high throughout.
 
 **The label loop is closed.** Resolving a case writes an ANALYST `TransactionOutcome`,
 which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs at least
@@ -88,8 +93,9 @@ which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs
 is now scored on one feature path, decided by a separate policy, recorded immutably, and —
 when it needs a human — routed to an analyst whose determination becomes a training label.
 
-**Next:** T-19 (LightGBM with calibration), which also inherits strict amount monotonicity.
-T-17 (graph features) and T-20 (anomaly layer) are unblocked too. Phase D is independent.
+**Next:** T-17 (graph features) closes A18 and may break the LightGBM/forest tie; T-20
+(anomaly layer) is also unblocked. Phase D is independent. A decision is also open: promote
+the calibrated LightGBM despite the tie, which would close A10 and the monotonicity `xfail`.
 
 **The shipped model changed in T-18.** It scores with 42 features and was trained on
 synthetic data; its metrics are real only for that data. Decisions made before T-18 used the
@@ -248,7 +254,7 @@ which is T-12.
 
 ### 3.5 Testing
 
-606 tests across 24 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
+635 tests across 25 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -284,7 +290,7 @@ These are defects in existing code, not missing features.
 | ~~A7~~ | ~~**Unbounded history load.** Scoring calls `.all()` on the user's entire transaction history and iterates it in Python — O(n) latency and memory per request.~~ **Resolved by T-02.** | `app/routers/transactions.py:22` |
 | ~~A8~~ | ~~**Feature logic triplicated.** Computed independently in `fraud_detection.py`, `retrain.py:build_features`, and `train_model.py`. Guaranteed train/serve skew.~~ **Resolved by T-01.** | three files |
 | ~~A9~~ | ~~**Model has no real signal.** Trained on 20 hand-written rows that are perfectly separable on amount alone (legit <= 400, fraud >= 5000), fit on 100% of the data with no holdout.~~ **Resolved by T-18.** | `app/ML/train_model.py` |
-| A10 | **Uncalibrated probabilities used arithmetically.** RandomForest `predict_proba` is poorly calibrated, yet is multiplied by 0.3 and summed into the score as if it were a true probability. | `app/fraud_detection.py` |
+| A10 | **Uncalibrated probabilities used arithmetically.** RandomForest `predict_proba` is poorly calibrated, yet is multiplied by 0.3 and summed into the score as if it were a true probability. **Still open.** T-08 documented it; T-19 built calibrated LightGBM, but it has not beaten the forest through the promotion gate, so the served probability is still uncalibrated. | `app/fraud_detection.py` |
 | ~~A11~~ | ~~**Feature-name mismatch.** A bare numpy array is passed to a model fitted on a DataFrame — emits a warning and relies silently on positional order.~~ **Resolved by T-08.** | `app/ML/models.py:15` |
 | ~~A12~~ | ~~**Naive datetime columns.** `Column(DateTime)` without `timezone=True`, forcing scattered `.replace(tzinfo=utc)` patches at every use site.~~ **Resolved by T-08.** | `app/models.py` |
 | ~~A13~~ | ~~**Dead decision states.** `REVIEW`, `MANUAL_REVIEW` and `STEP_UP` are terminal — no code path can resolve them.~~ **Resolved by T-12** (`REVIEW`, `MANUAL_REVIEW`) **and T-14b** (`STEP_UP`). | system-wide |
@@ -661,11 +667,11 @@ Not F1. The operating metrics are:
 
 | Industry practice | This project today | Task |
 |---|---|---|
-| GBDT primary scorer | ~~Degenerate RandomForest depth-1 stumps~~ a real forest on 42 features (T-18); GBDT is T-19 | T-19 |
+| GBDT primary scorer | GBDT built and gated (T-19); it tied the forest, which still serves | T-19 |
 | Feature store, one code path | ~~Features computed in three places~~ one path, `app/features.py` | ~~T-01~~ ✅ |
 | Streaming velocity counters | ~~In-Python scan of full history~~ bounded SQL; Redis still T-33 | ~~T-02~~ ✅ |
 | Policy layer separate from model | ~~Thresholds fused into the scorer~~ `app/policy.py` | ~~T-04~~ ✅ |
-| Calibrated probability | Raw uncalibrated `predict_proba` | T-19 |
+| Calibrated probability | Calibration built (T-19); the serving forest is still uncalibrated | T-19 |
 | Step-up auth as a third action | ~~Allow / review / reject only~~ STEP_UP decided (T-04) and completed by an OTP challenge (T-14b) | ~~T-04, T-14b~~ ✅ |
 | Chargeback and analyst labels | ~~Model's own output used as label~~ `TransactionOutcome`, unwritten until T-12 | ~~T-05~~ ✅ |
 | Full decision audit log | ~~Nothing logged~~ append-only, replayable | ~~T-11~~ ✅ |
@@ -687,7 +693,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 606 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 635 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -775,8 +781,14 @@ Decisions made while executing Phase A that later tasks must not silently undo.
     measured on synthetic data without saying so.
 20. **A model is promoted by the gate, not by hand.** `app/ML/train_model.py` and
     `scripts/retrain.py` both go through `retrain.run`: chronological split, held-out
-    metrics, and promotion only when the challenger's AUC beats the active model's on the
-    same window. Keep the previous model registered so the comparison stays inspectable.
+    metrics, and promotion only when the challenger beats the active model on **PR-AUC**
+    without losing more than 0.01 ROC AUC, on the same window. Hyper-parameters are chosen on
+    the training window only, and the test window is looked at once per decision - never
+    re-run until a model wins. A person may override the gate, but the reason goes in
+    writing beside the manifest. Keep the previous model registered.
+21. **Serving scores through `app/ML/scorer.py`,** held to within 1e-12 of `predict_proba`
+    by test. Any new model type gets its fast path only with its own parity test; until
+    then it falls back to `predict_proba`.
 
 ### 11.3 Definition of done
 
@@ -1619,11 +1631,55 @@ forest collapsed to depth-1 stumps.
 
 ---
 
-#### T-19 · LightGBM with calibration
+#### T-19 · LightGBM with calibration — ✅ DONE (`pending`), challenger not promoted
 
 **Depends on:** T-18
 **Fixes:** A9, A10
 **Modify:** `app/ML/train_model.py`, `scripts/retrain.py`, `app/ML/models.py`
+
+**As built:**
+
+- Both training paths now train a LightGBM booster, `scale_pos_weight` from the class ratio,
+  constrained to be non-decreasing in the five amount features. `is_round_amount` and
+  `amount_band_share` are left out of the model (40 of 42 features): they do not rise with
+  the amount, so no model using them can be monotone in it. Serving still computes both.
+- **Calibration** fits on the latest 20% of the training window, never on training or test
+  rows. `cv="prefit"` is gone from scikit-learn 1.8, so it wraps a `FrozenEstimator`.
+  **Isotonic only with 1,000+ fraud cases in that slice, Platt scaling below**, decided by
+  rule before evaluation. With 15 fraud cases isotonic collapsed every probability onto three
+  values, looked perfectly calibrated, and threw away the ranking; the spec's contract said
+  isotonic, and this is the reason it is not always used.
+- **The promotion gate now decides on PR-AUC**, and refuses a model that loses more than
+  0.01 ROC AUC. The AUC-only gate promoted a challenger in trial that was +0.0016 AUC but
+  -0.031 PR-AUC and -5.9 points of recall at 1% FPR - worse where rare fraud is concerned.
+- **Model selection on the training window only:** early stopping plus three capacities
+  (the spec's `num_leaves=31`, and two more regularised), chosen by validation PR-AUC. The
+  spec's configuration alone lost clearly (PR-AUC 0.850 vs 0.871): 500 trees on 185
+  positives weighted ~145x memorised them. The test window was then used once more.
+- **`app/ML/scorer.py`** scores straight from `FeatureVector` to probability. Through
+  scikit-learn's API one transaction cost 6.2 ms p50 / 20.8 ms p99, almost all DataFrame
+  validation; the model itself takes 0.27 ms. The fast path is held to within 1e-12 of
+  `predict_proba` by test - which caught a real bug: `CalibratedClassifierCV` prefers
+  LightGBM's `decision_function`, so its calibrator was fitted on log-odds, and feeding it
+  probabilities returned nonsense (0.308 where the model said 0.001).
+- **Result, 50k synthetic, held-out window of 10,000 rows (72 fraud):**
+
+  | | LightGBM, selected (7 leaves, 57 trees, Platt) | Forest (T-18, serving) |
+  |---|---|---|
+  | PR-AUC — decides promotion | 0.8678 | **0.8712** |
+  | ROC AUC | **0.9929** | 0.9895 |
+  | Recall at 1% FPR | 88.89% | 88.89% |
+  | Expected calibration error | **0.0010** | 0.0036 |
+  | Brier score | 0.00193 | 0.00190 |
+  | Inference p50 / p99 | **0.36 / 0.54 ms** | — |
+
+  **The gate kept the forest.** 0.0034 PR-AUC with 72 positives is about one transaction
+  ranked differently: a tie, not a loss. LightGBM wins on everything else, including the
+  monotonicity guarantee. Changing the gate, or re-running until it wins, after seeing this
+  would be tuning to the test window, so neither was done. Whether to promote it anyway is
+  a decision for a person, and convention 20 says how: record the reason with the manifest.
+- LightGBM needs the OpenMP runtime; the Docker image now installs `libgomp1`, without which
+  the API would build and then fail at import. Not verified here - no Docker available.
 
 **Contract**
 
@@ -1640,18 +1696,21 @@ calibrated = CalibratedClassifierCV(model, method="isotonic", cv="prefit")
 
 **Acceptance**
 
-- [ ] LightGBM replaces RandomForest in both training paths
-- [ ] `scale_pos_weight` set from the actual class ratio
-- [ ] Probabilities calibrated; a reliability curve is produced and stored
-- [ ] Brier score recorded in the manifest alongside AUC
-- [ ] Inference latency measured and under 10 ms
-- [ ] AUC and recall-at-1%-FPR compared against the RandomForest baseline, both logged
-- [ ] Calibration verified: among transactions scored ~0.7, roughly 70% are actually fraud
-- [ ] *(from T-18)* Monotone constraints on the amount features, so a higher amount never
-      lowers the score; remove the `xfail` from
-      `test_raising_the_amount_never_lowers_the_score` once it passes
+- [x] LightGBM replaces RandomForest in both training paths
+- [x] `scale_pos_weight` set from the actual class ratio
+- [x] Probabilities calibrated; a reliability curve is produced and stored
+- [x] Brier score recorded in the manifest alongside AUC
+- [x] Inference latency measured and under 10 ms
+- [x] AUC and recall-at-1%-FPR compared against the RandomForest baseline, both logged
+- [ ] Calibration verified: among transactions scored ~0.7, roughly 70% are actually fraud —
+      **not verifiable on this data:** only 5 held-out transactions scored 0.6-0.8 (observed
+      50% and 67%). Overall calibration error is 0.0010; the ~0.7 claim needs more fraud
+- [x] *(from T-18)* Monotone constraints on the amount features — built and tested on every
+      LightGBM challenger
+- [ ] Strict amount monotonicity **in serving**: the `xfail` stays, because the forest still
+      serves. It clears the day a LightGBM model is promoted
 - [ ] Beat the shipped forest (AUC 0.990, PR-AUC 0.871 on the synthetic held-out window)
-      through the same champion/challenger gate
+      through the same champion/challenger gate — **not met.** Effectively a tie; see below
 
 ---
 
@@ -1709,7 +1768,7 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
                       │                     ├── ✅ T-09 tests    │
                       │                     └── ✅ T-13 registry │
                       └── ✅ T-08 fix bundle ── ✅ T-15 schema ────┼── ✅ T-16 features+
-                                                                  │   └── ✅ T-18 data ── T-19 LightGBM
+                                                                  │   └── ✅ T-18 data ── ✅ T-19 LightGBM
                                                                   │   └── T-20 anomaly
                                                                   └── T-17 graph
 ✅ T-05 outcomes ──┬── ✅ T-06 chronological split
@@ -1722,11 +1781,11 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
    Phase D            (independent, can run in parallel throughout)
 ```
 
-**Unblocked right now:** T-17, T-19, T-20, and all of Phase D. **Phase B is complete.**
+**Unblocked right now:** T-17, T-20, and all of Phase D. **Phase B is complete.**
 
 **Phase B order, as executed:** T-10 → T-12 → T-11 → T-13 → T-14 → T-14b.
 
-**Suggested order for Phase C:** ~~T-15~~ → ~~T-16~~ → ~~T-18~~ → T-19, then T-17 and T-20. T-18 (realistic data) is what makes every later model comparison meaningful. That finishes the critical
+**Suggested order for Phase C:** ~~T-15~~ → ~~T-16~~ → ~~T-18~~ → ~~T-19~~ → T-17 → T-20. T-18 (realistic data) is what makes every later model comparison meaningful. That finishes the critical
 path (T-12 and T-11 are its last two links) before the supporting work.
 
 **Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11. ✅ **Complete.**

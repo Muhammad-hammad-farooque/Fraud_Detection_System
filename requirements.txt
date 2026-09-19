@@ -10,6 +10,7 @@ python-multipart==0.0.18
 pydantic[email]==2.12.5
 pyyaml==6.0.3
 scikit-learn
+lightgbm==4.7.0
 pandas
 joblib
 numpy==2.2.4

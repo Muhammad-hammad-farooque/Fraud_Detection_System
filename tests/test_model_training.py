@@ -13,7 +13,19 @@ import pytest
 from app.features import BASELINE_FEATURES, FEATURE_ORDER
 from app.ML.registry import load_model
 from scripts.generate_data import GeneratorConfig, generate
-from scripts.retrain import recall_at_fpr, run
+from scripts.retrain import MODEL_FEATURES, recall_at_fpr, run
+
+
+def _tree_depths(calibrated_model) -> list[int]:
+    """Depth of every tree in the LightGBM booster under the calibration wrapper."""
+    booster = calibrated_model.calibrated_classifiers_[0].estimator.estimator.booster_
+
+    def depth(node) -> int:
+        if "leaf_index" in node or "leaf_value" in node and "split_index" not in node:
+            return 0
+        return 1 + max(depth(node["left_child"]), depth(node["right_child"]))
+
+    return [depth(tree["tree_structure"]) for tree in booster.dump_model()["tree_info"]]
 
 # Small enough to build features in seconds, with enough fraud to measure.
 CONFIG = GeneratorConfig(transactions=2500, users=150, fraud_rate=0.04, seed=5)
@@ -46,16 +58,19 @@ def reset_db():
 
 
 class TestTheChallenger:
-    def test_it_trains_on_every_feature(self, trained):
+    def test_it_trains_on_every_monotone_safe_feature(self, trained):
+        """All of FEATURE_ORDER except the two that cannot be monotone in amount (T-19)."""
         result, _ = trained
-        assert list(result.challenger.feature_names_in_) == FEATURE_ORDER
+        assert list(result.challenger.feature_names_in_) == MODEL_FEATURES
+        assert len(MODEL_FEATURES) == len(FEATURE_ORDER) - 2
 
     def test_trees_reach_a_meaningful_depth(self, trained):
         """A9: the old forest collapsed to depth-1 stumps on separable data."""
         result, _ = trained
-        depths = [tree.get_depth() for tree in result.challenger.estimators_]
-        assert min(depths) >= 3
-        assert max(depths) >= 6
+        depths = _tree_depths(result.challenger)
+        assert len(depths) > 1
+        assert max(depths) >= 4
+        assert sum(depths) / len(depths) >= 2
 
     def test_it_learns_real_signal(self, trained):
         result, _ = trained
@@ -69,10 +84,10 @@ class TestTheChallenger:
 
 
 class TestTheManifest:
-    def test_importance_is_recorded_for_every_feature(self, trained):
+    def test_importance_is_recorded_for_every_model_feature(self, trained):
         _, root = trained
         _, manifest = load_model(root=root)
-        assert set(manifest.feature_importance) == set(FEATURE_ORDER)
+        assert set(manifest.feature_importance) == set(MODEL_FEATURES)
 
     def test_importance_is_informative(self, trained):
         """Some features matter; permutation importance is not uniformly zero."""
@@ -83,8 +98,17 @@ class TestTheManifest:
     def test_fraud_metrics_are_recorded(self, trained):
         _, root = trained
         _, manifest = load_model(root=root)
-        assert {"auc", "average_precision", "recall_at_1pct_fpr", "test_rows"} <= set(manifest.metrics)
+        assert {"auc", "average_precision", "recall_at_1pct_fpr", "test_rows", "brier",
+                "expected_calibration_error", "inference_ms_p50", "inference_ms_p99",
+                "scale_pos_weight"} <= set(manifest.metrics)
         assert manifest.training_rows > manifest.metrics["test_rows"]
+        assert manifest.algorithm in ("LGBMClassifier+sigmoid", "LGBMClassifier+isotonic")
+
+    def test_the_reliability_curve_is_stored(self, trained):
+        _, root = trained
+        _, manifest = load_model(root=root)
+        assert manifest.reliability
+        assert sum(row["count"] for row in manifest.reliability) == manifest.metrics["test_rows"]
 
     def test_the_new_model_is_active_in_its_registry(self, trained):
         result, root = trained

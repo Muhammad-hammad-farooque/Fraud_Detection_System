@@ -40,6 +40,9 @@ class ModelManifest:
     # Permutation importance on the held-out window (T-18). Empty for models
     # registered before it was recorded.
     feature_importance: dict[str, float] = field(default_factory=dict)
+    # The reliability curve on the held-out window (T-19): per probability bin,
+    # the mean predicted and the observed fraud rate, and how many fell in it.
+    reliability: list[dict] = field(default_factory=list)
 
     def to_json(self) -> str:
         data = asdict(self)
@@ -100,6 +103,7 @@ def save_model(
     version: str | None = None,
     root: Path | None = None,
     feature_importance: dict[str, float] | None = None,
+    reliability: list[dict] | None = None,
 ) -> ModelManifest:
     """Write a model and its manifest as a new version. Does not activate it."""
     trained_at = trained_at or datetime.now(timezone.utc)
@@ -114,6 +118,7 @@ def save_model(
         training_rows=int(training_rows),
         algorithm=algorithm,
         feature_importance={name: float(value) for name, value in (feature_importance or {}).items()},
+        reliability=list(reliability or []),
     )
     _check_feature_order(model, manifest)       # refuse to store a model that could never load
 

@@ -2,7 +2,7 @@
 Retraining Pipeline
 -------------------
 Loads labeled transactions from the database, recomputes features,
-trains a new RandomForest model, evaluates it against the current
+trains a calibrated LightGBM challenger, evaluates it against the current
 deployed model, and registers and activates the new model only if it wins.
 
 run() takes any database session, so the same pipeline trains the shipped
@@ -18,14 +18,18 @@ from dataclasses import asdict
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
-from sklearn.ensemble import RandomForestClassifier
+import lightgbm as lgb
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.frozen import FrozenEstimator
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import (
-    average_precision_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
+    average_precision_score, brier_score_loss, classification_report, confusion_matrix,
+    roc_auc_score, roc_curve,
 )
+import time
 
 # Make sure the project root is on the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,6 +39,8 @@ from app import models
 from app.features import FEATURE_ORDER, TransactionInput
 from app.fraud_detection import features_at
 from app.ML.registry import ModelManifest, RegistryError, activate, load_model, save_model
+from app.ML.scorer import build_scorer
+from app.features import FeatureVector
 
 LOG_PATH   = os.path.join(os.path.dirname(__file__), "..", "logs", "retrain.log")
 
@@ -155,20 +161,169 @@ def _date_range(df: pd.DataFrame) -> str:
 
 
 IMPORTANCE_REPEATS = 3
+CALIBRATION_FRACTION = 0.2          # the latest slice of the training window
+LATENCY_SAMPLES = 300
+
+# A higher amount must never lower the score (§5.7). The model is constrained
+# to be non-decreasing in every feature that rises with the amount...
+MONOTONE_INCREASING = (
+    "amount",
+    "amount_deviation",
+    "amount_zscore",
+    "amount_population_percentile",
+    "ratio_to_lifetime_max",
+)
+# ...and left without the two amount features that do not rise with it:
+# is_round_amount flips 1-0-1 across 500, 501, 600, and amount_band_share
+# jumps between order-of-magnitude bands. A model using either cannot be
+# monotone in amount whatever its constraints. Serving still computes and
+# audits both; the model simply does not read them.
+NOT_MONOTONE_IN_AMOUNT = ("is_round_amount", "amount_band_share")
+MODEL_FEATURES = [name for name in FEATURE_ORDER if name not in NOT_MONOTONE_IN_AMOUNT]
+# Isotonic regression overfits small calibration sets - scikit-learn advises
+# against it below roughly a thousand samples - and with a few dozen fraud
+# cases it collapses every probability onto a handful of steps, which throws
+# away the ranking PR-AUC depends on. Below this many fraud cases in the
+# calibration window, Platt scaling (a sigmoid) is used instead. It is
+# decided by rule, before evaluation, so the test window never chooses it.
+ISOTONIC_MIN_POSITIVES = 1000
+
+# Promotion (§11.2b, convention 20). Fraud is rare, and ROC AUC barely moves
+# between models that differ a lot where it matters, so the challenger must win
+# on PR-AUC and may not give up more than this much ROC AUC doing it.
+MAX_AUC_REGRESSION = 0.01
 
 
-def make_model() -> RandomForestClassifier:
-    """The challenger. class_weight rebalances the ~0.7% fraud class (A9, §5.3);
-    the depth and leaf limits keep the artifact small enough to ship in the
-    repository. LightGBM with calibration replaces this in T-19."""
-    return RandomForestClassifier(
-        n_estimators=150,
-        max_depth=14,
-        min_samples_leaf=5,
-        class_weight="balanced_subsample",
-        n_jobs=-1,
+# Candidate capacities, chosen between on the training window only. The first
+# is the spec's contract. With a few hundred fraud cases each weighted ~150x,
+# it memorises the positives: on the 50k synthetic data it lost to the forest
+# (PR-AUC 0.850 vs 0.871). The others trade capacity for regularisation. The
+# test window never takes part in this choice.
+CANDIDATES = (
+    {"num_leaves": 31, "min_child_samples": 20},
+    {"num_leaves": 15, "min_child_samples": 50, "subsample": 0.8, "subsample_freq": 1, "colsample_bytree": 0.8},
+    {"num_leaves": 7, "min_child_samples": 100, "subsample": 0.8, "subsample_freq": 1, "colsample_bytree": 0.8,
+     "reg_lambda": 1.0},
+)
+MAX_TREES = 2000
+EARLY_STOPPING_ROUNDS = 100
+
+
+def make_booster(scale_pos_weight: float, n_estimators: int = MAX_TREES, **capacity) -> lgb.LGBMClassifier:
+    """The gradient-boosted challenger (T-19). scale_pos_weight rebalances the
+    rare fraud class from the actual ratio; the monotone constraints make a
+    larger amount never less risky."""
+    params = {"num_leaves": 31, "min_child_samples": 20, **capacity}
+    return lgb.LGBMClassifier(
+        n_estimators=n_estimators,
+        learning_rate=0.05,
+        scale_pos_weight=scale_pos_weight,
+        monotone_constraints=[1 if name in MONOTONE_INCREASING else 0 for name in MODEL_FEATURES],
+        monotone_constraints_method="advanced",
         random_state=42,
+        verbose=-1,
+        **params,
     )
+
+
+def select_booster(X_fit, y_fit, X_val, y_val, scale_pos_weight: float) -> tuple[lgb.LGBMClassifier, dict]:
+    """Fit every candidate with early stopping on the validation slice and keep
+    the one with the best validation PR-AUC. Returns it with its settings."""
+    best, best_info = None, None
+    for capacity in CANDIDATES:
+        booster = make_booster(scale_pos_weight, **capacity)
+        booster.fit(X_fit, y_fit, eval_X=(X_val,), eval_y=(y_val,), eval_metric="average_precision",
+                    callbacks=[lgb.early_stopping(EARLY_STOPPING_ROUNDS, verbose=False)])
+        score = float(average_precision_score(y_val, booster.predict_proba(X_val)[:, 1]))
+        if best_info is None or score > best_info["validation_average_precision"]:
+            best, best_info = booster, {**capacity, "trees": int(booster.best_iteration_ or MAX_TREES),
+                                        "validation_average_precision": score}
+    return best, best_info
+
+
+def train_challenger(X_train, y_train) -> tuple[CalibratedClassifierCV, dict]:
+    """Fit the booster on the earlier 80% of the training window and calibrate
+    it on the later 20%.
+
+    Calibrating on rows the booster trained on would only learn its
+    overconfidence, and the test window must stay untouched for evaluation, so
+    calibration gets its own slice - the latest, like the test window, so the
+    split stays chronological. scale_pos_weight inflates probabilities by
+    design; isotonic calibration maps them back to observed fraud rates, and
+    being monotone it preserves both the ranking and the amount guarantee.
+    """
+    cut = int(len(X_train) * (1 - CALIBRATION_FRACTION))
+    X_fit, y_fit = X_train.iloc[:cut], y_train[:cut]
+    X_cal, y_cal = X_train.iloc[cut:], y_train[cut:]
+    positives = int(y_fit.sum())
+    scale_pos_weight = (len(y_fit) - positives) / max(positives, 1)
+    method = "isotonic" if int(y_cal.sum()) >= ISOTONIC_MIN_POSITIVES else "sigmoid"
+
+    # The calibration slice doubles as the early-stopping and selection set: it
+    # is the only data after the fit window that is not the test window.
+    booster, selection = select_booster(X_fit, y_fit, X_cal, y_cal, scale_pos_weight)
+    calibrated = CalibratedClassifierCV(FrozenEstimator(booster), method=method).fit(X_cal, y_cal)
+    if method == "sigmoid" and calibrated.calibrated_classifiers_[0].calibrators[0].a_ > 0:
+        # A decreasing sigmoid would invert the ranking and break the amount guarantee.
+        raise RuntimeError("Platt scaling fitted a decreasing curve; refusing an inverted model")
+    info = {
+        "scale_pos_weight": scale_pos_weight,
+        "selection": selection,
+        "calibration_method": method,
+        "fit_rows": len(X_fit),
+        "calibration_rows": len(X_cal),
+        "calibration_fraud": int(y_cal.sum()),
+    }
+    return calibrated, info
+
+
+def challenger_wins(new: dict, old: dict) -> tuple[bool, str]:
+    """PR-AUC decides; ROC AUC may not fall by more than MAX_AUC_REGRESSION."""
+    new_ap, old_ap = new["average_precision"], old.get("average_precision", 0.0)
+    new_auc, old_auc = new["auc"], old.get("auc", 0.0)
+    if new_ap <= old_ap:
+        return False, f"challenger PR-AUC {new_ap:.4f} <= champion {old_ap:.4f}"
+    if new_auc < old_auc - MAX_AUC_REGRESSION:
+        return False, (f"challenger PR-AUC {new_ap:.4f} > {old_ap:.4f}, but ROC AUC fell "
+                       f"{old_auc - new_auc:.4f} (limit {MAX_AUC_REGRESSION})")
+    return True, f"challenger PR-AUC {new_ap:.4f} > champion {old_ap:.4f}; ROC AUC {new_auc:.4f} vs {old_auc:.4f}"
+
+
+def reliability(y_true, y_prob, bins: int = 10) -> list[dict]:
+    """Predicted versus observed fraud rate in equal-width probability bins,
+    with how many transactions each bin holds - most sit near zero."""
+    rows = []
+    for i in range(bins):
+        low, high = i / bins, (i + 1) / bins
+        mask = (y_prob >= low) & ((y_prob < high) if i < bins - 1 else (y_prob <= high))
+        count = int(mask.sum())
+        if count:
+            rows.append({"low": low, "high": high, "count": count,
+                         "predicted": float(y_prob[mask].mean()), "observed": float(y_true[mask].mean())})
+    return rows
+
+
+def expected_calibration_error(curve: list[dict]) -> float:
+    total = sum(row["count"] for row in curve)
+    return sum(row["count"] / total * abs(row["predicted"] - row["observed"]) for row in curve) if total else 0.0
+
+
+def measure_latency(model, X, samples: int = LATENCY_SAMPLES) -> dict:
+    """Single-transaction scoring time through the function serving uses
+    (app/ML/scorer.py), from FeatureVector to probability - what one request
+    pays. Returns milliseconds at p50 and p99."""
+    score = build_scorer(model, list(X.columns))
+    defaults = {name: 0.0 for name in FEATURE_ORDER}
+    vectors = [FeatureVector(**{**defaults, **X.iloc[i % len(X)].to_dict()}) for i in range(samples)]
+    for fv in vectors[:20]:
+        score(fv)                                            # warm up
+    timings = []
+    for fv in vectors:
+        started = time.perf_counter()
+        score(fv)
+        timings.append((time.perf_counter() - started) * 1000)
+    timings.sort()
+    return {"inference_ms_p50": timings[len(timings) // 2], "inference_ms_p99": timings[int(len(timings) * 0.99)]}
 
 
 def recall_at_fpr(y_true, y_prob, max_fpr: float = 0.01) -> float:
@@ -179,18 +334,25 @@ def recall_at_fpr(y_true, y_prob, max_fpr: float = 0.01) -> float:
 
 
 def evaluate(model, X_test, y_test, label: str) -> dict:
-    y_pred      = model.predict(X_test)
     y_prob      = model.predict_proba(X_test)[:, 1]
+    y_pred      = (y_prob >= 0.5).astype(int)
+    curve       = reliability(y_test, y_prob)
     metrics = {
         "auc": float(roc_auc_score(y_test, y_prob)),
         "average_precision": float(average_precision_score(y_test, y_prob)),
         "recall_at_1pct_fpr": recall_at_fpr(y_test, y_prob, 0.01),
+        "brier": float(brier_score_loss(y_test, y_prob)),
+        "expected_calibration_error": expected_calibration_error(curve),
     }
+    metrics["_reliability"] = curve                        # stored on the manifest, not as a metric
     cm          = confusion_matrix(y_test, y_pred, labels=[0, 1])
 
     log(f"--- {label} ---")
     log(f"AUC-ROC: {metrics['auc']:.4f}   PR-AUC: {metrics['average_precision']:.4f}   "
-        f"recall at 1% FPR: {metrics['recall_at_1pct_fpr']:.2%}")
+        f"recall at 1% FPR: {metrics['recall_at_1pct_fpr']:.2%}   "
+        f"Brier: {metrics['brier']:.5f}   ECE: {metrics['expected_calibration_error']:.4f}")
+    log("Reliability (predicted vs observed fraud rate): " + "; ".join(
+        f"[{r['low']:.1f},{r['high']:.1f}) n={r['count']} {r['predicted']:.3f}->{r['observed']:.3f}" for r in curve))
     log(f"Confusion Matrix:\n  TN={cm[0][0]}  FP={cm[0][1]}\n  FN={cm[1][0]}  TP={cm[1][1]}")
     log(f"Report:\n{classification_report(y_test, y_pred, labels=[0, 1], target_names=['Legit','Fraud'], zero_division=0)}")
     return metrics
@@ -274,8 +436,9 @@ def run(db=None, root: Path | None = None, activate_on_win: bool = True) -> Retr
 
         # DataFrames, not arrays: the model keeps its feature names, which the
         # registry checks against FEATURE_ORDER before it will store or load it.
-        X_train, y_train = train_df[FEATURE_ORDER], train_df["fraud"].values
-        X_test, y_test = test_df[FEATURE_ORDER], test_df["fraud"].values
+        X_train, y_train = train_df[MODEL_FEATURES], train_df["fraud"].values
+        X_test, y_test = test_df[MODEL_FEATURES], test_df["fraud"].values
+        X_all_test = test_df[FEATURE_ORDER]                  # for a champion on other features
         log(f"Train size: {len(X_train)}  ({_date_range(train_df)})  fraud={int(y_train.sum())}")
         log(f"Test  size: {len(X_test)}  ({_date_range(test_df)})  fraud={int(y_test.sum())}")
 
@@ -284,9 +447,15 @@ def run(db=None, root: Path | None = None, activate_on_win: bool = True) -> Retr
             return RetrainResult(False, "single-class window")
 
         # ── 5. Train new model ────────────────────────────────────
-        new_model = make_model()
-        new_model.fit(X_train, y_train)
+        new_model, training_info = train_challenger(X_train, y_train)
+        log(f"LightGBM fitted on {training_info['fit_rows']} rows (scale_pos_weight "
+            f"{training_info['scale_pos_weight']:.1f}); {training_info['calibration_method']} calibration "
+            f"on the next {training_info['calibration_rows']} ({training_info['calibration_fraud']} fraud)")
+        log(f"Selected on the training window: {training_info['selection']}")
         new_metrics = evaluate(new_model, X_test, y_test, "New Model")
+        reliability_curve = new_metrics.pop("_reliability")
+        new_metrics.update(measure_latency(new_model, X_test))
+        log(f"Inference: p50 {new_metrics['inference_ms_p50']:.2f} ms, p99 {new_metrics['inference_ms_p99']:.2f} ms")
         importance = measure_importance(new_model, X_test, y_test)
         top = sorted(importance.items(), key=lambda kv: kv[1], reverse=True)[:10]
         log("Top features by permutation importance: " + ", ".join(f"{k}={v:.4f}" for k, v in top))
@@ -299,25 +468,34 @@ def run(db=None, root: Path | None = None, activate_on_win: bool = True) -> Retr
             old_model, old_manifest = load_model(root=root)
             log(f"Active model: {old_manifest.version}")
             # The champion may use a subset of the features; give it its own.
-            result.champion_metrics = evaluate(old_model, X_test[old_manifest.feature_order], y_test,
+            result.champion_metrics = evaluate(old_model, X_all_test[old_manifest.feature_order], y_test,
                                                "Current Model")
+            result.champion_metrics.pop("_reliability")
         except RegistryError as exc:
             log(f"No loadable active model ({exc}). The challenger wins by default.")
             result.champion_metrics = {"auc": 0.0}
 
         # ── 7. Champion / challenger decision ─────────────────────
-        new_auc, old_auc = new_metrics["auc"], result.champion_metrics["auc"]
-        if new_auc > old_auc:
+        old_auc = result.champion_metrics["auc"]
+        wins, reason = challenger_wins(new_metrics, result.champion_metrics)
+        if wins:
             result.manifest = save_model(
                 new_model,
-                algorithm="RandomForestClassifier",
+                algorithm=f"LGBMClassifier+{training_info['calibration_method']}",
                 training_rows=len(train_df),
-                metrics={**new_metrics, "test_rows": len(test_df), "champion_auc": old_auc},
+                metrics={**new_metrics, "test_rows": len(test_df), "champion_auc": old_auc,
+                         "champion_recall_at_1pct_fpr": result.champion_metrics.get("recall_at_1pct_fpr", 0.0),
+                         "champion_average_precision": result.champion_metrics.get("average_precision", 0.0),
+                         "scale_pos_weight": training_info["scale_pos_weight"],
+                         "trees": training_info["selection"]["trees"],
+                         "num_leaves": training_info["selection"]["num_leaves"],
+                         "validation_average_precision": training_info["selection"]["validation_average_precision"]},
                 feature_importance=importance,
+                reliability=reliability_curve,
                 root=root,
             )
             result.promoted = True
-            result.reason = f"challenger AUC {new_auc:.4f} > champion {old_auc:.4f}"
+            result.reason = reason
             if activate_on_win:
                 activate(result.manifest.version, root=root)
                 log(f"New model {result.manifest.version} registered and activated. "
@@ -325,7 +503,7 @@ def run(db=None, root: Path | None = None, activate_on_win: bool = True) -> Retr
             else:
                 log(f"New model {result.manifest.version} registered, not activated. {result.reason}.")
         else:
-            result.reason = f"challenger AUC {new_auc:.4f} <= champion {old_auc:.4f}"
+            result.reason = reason
             log(f"Current model retained. {result.reason}")
         return result
 

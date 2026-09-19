@@ -33,7 +33,7 @@ class ScoreBreakdown:
     """Everything needed to reconstruct the decision. Feeds the audit log in T-11."""
     rule_hits: list[RuleHit]
     rule_score: float          # normalised to [0, 1]
-    model_probability: float   # uncalibrated until T-19, [0, 1]
+    model_probability: float   # [0, 1]; calibrated only if the active model is (see app/ML/models.py)
     final_score: float         # [0, 1]
     model_version: str
     feature_vector: FeatureVector | None = field(default=None)

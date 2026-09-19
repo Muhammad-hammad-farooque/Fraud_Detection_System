@@ -7,9 +7,11 @@ a different version takes effect on the next restart.
 """
 from ..features import FeatureVector
 from .registry import load_model
+from .scorer import build_scorer
 
 model, MANIFEST = load_model()
 MODEL_VERSION = MANIFEST.version
+_score = build_scorer(model, MANIFEST.feature_order)
 
 
 def predict_fraud(fv: FeatureVector) -> tuple[int, float]:
@@ -19,12 +21,13 @@ def predict_fraud(fv: FeatureVector) -> tuple[int, float]:
     its own order, so a model trained on a subset of FEATURE_ORDER keeps working
     as features are added.
 
-    The probability is a RandomForest predict_proba output and is NOT calibrated:
-    a score of 0.7 does not mean 70% of such transactions are fraud. It is
-    consumed numerically by app/scoring.py regardless, which T-19 fixes by
-    swapping in a calibrated gradient-boosted model (A10).
+    Whether that probability is calibrated depends on the active model. Models
+    trained since T-19 are a LightGBM booster wrapped in calibration, whose
+    manifest carries a reliability curve; app/scoring.py blends the
+    probability numerically and assumes it is one (A10). The forest trained in
+    T-18, which still serves because LightGBM has not beaten it through the
+    promotion gate, is NOT calibrated. The class is derived from the same
+    probability, so each decision calls the model once.
     """
-    frame = fv.to_frame(columns=MANIFEST.feature_order)
-    prediction = int(model.predict(frame)[0])
-    probability = float(model.predict_proba(frame)[0][1])
-    return prediction, probability
+    probability = _score(fv)
+    return int(probability >= 0.5), probability
