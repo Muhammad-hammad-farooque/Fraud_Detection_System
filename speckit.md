@@ -70,7 +70,7 @@ and its acceptance boxes ticked in §12.
 | T-13 · Model registry and config-driven rules | `2d2550c` | — |
 | T-14 · Idempotency | `fcbe145` | A15 |
 | T-14b · Step-up authentication flow | `25c6a57` | A13 (`STEP_UP`) |
-| T-15 · Expand the transaction schema | `pending` | prerequisite for T-16, T-17 |
+| T-15 · Expand the transaction schema | `2a847d1` | prerequisite for T-16, T-17 |
 
 **Suite:** 482 tests, 99% coverage of `app/`, about two minutes (four tests start the API
 in a subprocess to prove startup checks).
@@ -1383,7 +1383,7 @@ lifecycle of its own rather than being folded into the analyst queue.
 
 ---
 
-#### T-15 · Expand the transaction schema — ✅ DONE (`pending`)
+#### T-15 · Expand the transaction schema — ✅ DONE (`2a847d1`)
 
 **Depends on:** T-08
 **Blocks:** T-16, T-17
