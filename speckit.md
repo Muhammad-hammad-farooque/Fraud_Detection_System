@@ -66,7 +66,7 @@ and its acceptance boxes ticked in §12.
 | T-09 · Test infrastructure and rule coverage | `5cff5f0` | A17 |
 | T-10 · Role-based access control | `b1e3e38` | prerequisite for T-12 |
 | T-12 · Analyst case queue | `f50ea16` | A13 (REVIEW / MANUAL_REVIEW) |
-| T-11 · Immutable decision audit trail | `pending` | P6 |
+| T-11 · Immutable decision audit trail | `969e0f0` | P6 |
 
 **Suite:** 346 tests, 99% coverage of `app/`, under a minute.
 
@@ -1147,7 +1147,7 @@ def require_role(*allowed: Role):
 
 ---
 
-#### T-11 · Immutable decision audit trail — ✅ DONE (`pending`)
+#### T-11 · Immutable decision audit trail — ✅ DONE (`969e0f0`)
 
 **Depends on:** T-03, T-04
 **Fixes:** design principle P6
