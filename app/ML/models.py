@@ -15,15 +15,16 @@ MODEL_VERSION = MANIFEST.version
 def predict_fraud(fv: FeatureVector) -> tuple[int, float]:
     """Returns (prediction, fraud_probability) for one feature vector.
 
-    The vector is passed as a DataFrame whose column order is FEATURE_ORDER, so
-    the model matches features by name rather than silently by position.
+    The model receives exactly the columns its manifest lists, by name and in
+    its own order, so a model trained on a subset of FEATURE_ORDER keeps working
+    as features are added.
 
     The probability is a RandomForest predict_proba output and is NOT calibrated:
     a score of 0.7 does not mean 70% of such transactions are fraud. It is
     consumed numerically by app/scoring.py regardless, which T-19 fixes by
     swapping in a calibrated gradient-boosted model (A10).
     """
-    frame = fv.to_frame()
+    frame = fv.to_frame(columns=MANIFEST.feature_order)
     prediction = int(model.predict(frame)[0])
     probability = float(model.predict_proba(frame)[0][1])
     return prediction, probability

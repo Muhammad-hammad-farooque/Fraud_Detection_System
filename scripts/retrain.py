@@ -25,7 +25,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal
 from app import models
-from app.features import FEATURE_ORDER, aggregates_from_history, compute_features
+from app.features import FEATURE_ORDER, TransactionInput
+from app.fraud_detection import features_at
 from app.ML.registry import RegistryError, activate, load_model, save_model
 
 LOG_PATH   = os.path.join(os.path.dirname(__file__), "..", "logs", "retrain.log")
@@ -69,6 +70,11 @@ def load_labeled_data(db) -> pd.DataFrame:
             "amount":     tx.amount,
             "location":   tx.location,
             "device_id":  tx.device_id,
+            "merchant_id":       tx.merchant_id,
+            "merchant_category": tx.merchant_category,
+            "channel":           tx.channel,
+            "latitude":          tx.latitude,
+            "longitude":         tx.longitude,
             "created_at": tx.created_at,
             "source":     outcome.source,
             "fraud":      int(bool(outcome.is_fraud_confirmed)),
@@ -77,24 +83,24 @@ def load_labeled_data(db) -> pd.DataFrame:
     ])
 
 
-def build_features(df: pd.DataFrame, device_user_counts: dict) -> pd.DataFrame:
+def build_features(db, df: pd.DataFrame) -> pd.DataFrame:
     """
-    Recompute features through app.features, preserving temporal order so
-    each row only sees the user's strictly earlier transactions.
+    Recompute each labelled transaction's features exactly as serving computed
+    them, by calling the same repository queries "as of" the transaction's own
+    timestamp.
+
+    History comes from every transaction in the database, not just the
+    labelled ones, and nothing at or after the row's timestamp is visible -
+    no feature can see the future. Before T-16 training rebuilt history from
+    labelled rows only and counted device sharing across the whole dataset,
+    which served different features than it trained on.
     """
     df = df.sort_values("created_at").reset_index(drop=True)
 
     vectors = []
-    for i, row in df.iterrows():
-        history = df[(df["user_id"] == row["user_id"]) & (df.index < i)]
-        aggregates = aggregates_from_history(history.itertuples(index=False), row["created_at"])
-        fv = compute_features(
-            amount=row["amount"],
-            location=row["location"],
-            aggregates=aggregates,
-            device_user_count=device_user_counts.get(row["device_id"], 0),
-        )
-        vectors.append(asdict(fv))
+    for row in df.itertuples(index=False):
+        candidate = TransactionInput.from_request(row, at=row.created_at)
+        vectors.append(asdict(features_at(db, candidate, row.user_id)))
 
     features = pd.DataFrame(vectors, columns=FEATURE_ORDER, index=df.index)
     return pd.concat([df.drop(columns=["amount"]), features], axis=1)
@@ -188,10 +194,7 @@ def run():
             return
 
         # ── 3. Build features ─────────────────────────────────────
-        device_user_counts = (
-            df.groupby("device_id")["user_id"].nunique().to_dict()
-        )
-        df = build_features(df, device_user_counts)
+        df = build_features(db, df)
 
         # ── 4. Chronological split ────────────────────────────────
         # A random split on time-ordered data trains on the future to predict
@@ -221,7 +224,8 @@ def run():
         try:
             old_model, old_manifest = load_model()
             log(f"Active model: {old_manifest.version}")
-            old_auc = evaluate(old_model, X_test, y_test, "Current Model")
+            # The champion may use a subset of the features; give it its own.
+            old_auc = evaluate(old_model, X_test[old_manifest.feature_order], y_test, "Current Model")
         except RegistryError as exc:
             log(f"No loadable active model ({exc}). The challenger wins by default.")
             old_auc = 0.0

@@ -6,10 +6,11 @@ Each saved model lives in its own directory with a manifest beside it:
     app/ML/artifacts/<version>/manifest.json
     app/ML/artifacts/ACTIVE                  <- the version serving traffic
 
-A model is never loaded without its manifest, and never loaded if the feature
-order it was trained on differs from features.FEATURE_ORDER. That check is the
+A model is never loaded without its manifest, and never loaded if it needs a
+feature that features.FEATURE_ORDER does not compute. That check is the
 train/serve skew tripwire: it turns a silent wrong prediction into a refusal
-to start.
+to start. A model may use a subset of FEATURE_ORDER; serving hands it exactly
+the columns its manifest lists.
 """
 import json
 import os
@@ -54,7 +55,7 @@ class RegistryError(RuntimeError):
 
 
 class FeatureOrderMismatch(RegistryError):
-    """The model was trained on a different feature order than serving uses."""
+    """The model's features and what serving computes do not line up."""
 
 
 def registry_dir() -> Path:
@@ -62,16 +63,23 @@ def registry_dir() -> Path:
 
 
 def _check_feature_order(model: Any, manifest: ModelManifest) -> None:
-    if manifest.feature_order != FEATURE_ORDER:
+    """Serving must compute every feature the model needs, and the model must
+    have been fitted on exactly the features its manifest lists.
+
+    A model may use a subset of FEATURE_ORDER: serving hands it exactly its own
+    columns, by name and in its own order (T-16). What it may not do is need a
+    feature serving does not compute - that is train/serve skew.
+    """
+    missing = [name for name in manifest.feature_order if name not in FEATURE_ORDER]
+    if missing:
         raise FeatureOrderMismatch(
-            f"model {manifest.version} was trained on {manifest.feature_order}, "
-            f"but serving computes {FEATURE_ORDER}"
+            f"model {manifest.version} needs features serving does not compute: {missing}"
         )
     trained_on = getattr(model, "feature_names_in_", None)
     if trained_on is None:
         raise FeatureOrderMismatch(
             f"model {manifest.version} carries no feature names; train it on a DataFrame "
-            "with FEATURE_ORDER columns so the order can be verified"
+            "with named feature columns so they can be verified"
         )
     if list(trained_on) != manifest.feature_order:
         raise FeatureOrderMismatch(
@@ -95,7 +103,9 @@ def save_model(
     manifest = ModelManifest(
         version=version,
         trained_at=trained_at,
-        feature_order=list(FEATURE_ORDER),
+        # The features the model was actually fitted on, which may be a subset
+        # of FEATURE_ORDER. A model without names fails the check below.
+        feature_order=list(getattr(model, "feature_names_in_", [])),
         metrics={name: float(value) for name, value in metrics.items()},
         training_rows=int(training_rows),
         algorithm=algorithm,
@@ -134,9 +144,9 @@ def list_versions(root: Path | None = None) -> list[str]:
 
 
 def load_model(version: str | None = None, root: Path | None = None) -> tuple[Any, ModelManifest]:
-    """Loads a specific version, or the active one. Raises if the manifest's
-    feature_order does not match features.FEATURE_ORDER - this is the
-    train/serve skew tripwire."""
+    """Loads a specific version, or the active one. Raises if the model needs a
+    feature serving does not compute, or was fitted on columns its manifest
+    does not list - this is the train/serve skew tripwire."""
     root = root or registry_dir()
     version = version or active_version(root)
     target = root / version

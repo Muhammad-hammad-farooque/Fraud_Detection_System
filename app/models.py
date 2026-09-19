@@ -27,6 +27,9 @@ class User(Base):
     # only an admin (or scripts/set_role.py) can change it.
     role = Column(String, nullable=False, default=Role.CUSTOMER.value,
                   server_default=Role.CUSTOMER.value)
+    # Sign-up time, for the account_age_days feature (T-16).
+    created_at = Column(DateTime(timezone=True), nullable=True,
+                        default=lambda: datetime.now(timezone.utc))
     transactions = relationship("Transaction", back_populates="user")
 
 class Transaction(Base):

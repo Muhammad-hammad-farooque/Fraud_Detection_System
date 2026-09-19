@@ -234,7 +234,10 @@ def populate():
             user = models.User(
                 name=f"{first} {last}",
                 email=email,
-                hashed_password=hash_password("password123")
+                hashed_password=hash_password("password123"),
+                # Signed up before any generated transaction (those span 365 days),
+                # so account_age_days is never negative.
+                created_at=datetime.now(timezone.utc) - timedelta(days=random.randint(400, 2000)),
             )
             db.add(user)
 

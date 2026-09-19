@@ -6,7 +6,7 @@ from sklearn.metrics import roc_auc_score
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from app.features import FEATURE_ORDER
+from app.features import BASELINE_FEATURES
 from app.ML.registry import activate, save_model
 
 # Synthetic training data with meaningful fraud signals:
@@ -29,7 +29,9 @@ data = {
 
 df = pd.DataFrame(data)
 
-X = df[FEATURE_ORDER]
+# The 20 hand-written rows only describe the five baseline features. T-18
+# brings data rich enough to train on the full FEATURE_ORDER.
+X = df[BASELINE_FEATURES]
 y = df["fraud"]
 
 model = RandomForestClassifier(n_estimators=100, random_state=42)

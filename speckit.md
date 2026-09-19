@@ -6,7 +6,7 @@
 | **Version** | 0.1.0 |
 | **Status** | Working prototype — not production ready. Phases A and B complete. |
 | **Last reviewed** | 2026-09-19 |
-| **Progress** | 16 / 34 tasks · 16 / 18 defects fixed — Phases A and B complete, C started — see §1.4 |
+| **Progress** | 17 / 34 tasks · 16 / 18 defects fixed — Phases A and B complete, C under way — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -71,8 +71,9 @@ and its acceptance boxes ticked in §12.
 | T-14 · Idempotency | `fcbe145` | A15 |
 | T-14b · Step-up authentication flow | `25c6a57` | A13 (`STEP_UP`) |
 | T-15 · Expand the transaction schema | `2a847d1` | prerequisite for T-16, T-17 |
+| T-16 · Feature expansion (retraining moved to T-18) | `pending` | two training bugs from T-05 |
 
-**Suite:** 482 tests, 99% coverage of `app/`, about two minutes (four tests start the API
+**Suite:** 565 tests, 99% coverage of `app/`, under two minutes (four tests start the API
 in a subprocess to prove startup checks).
 
 **Still open:** A9 (weak training data, T-18) and A18 (`networkx` unused — kept
@@ -86,8 +87,9 @@ which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs
 is now scored on one feature path, decided by a separate policy, recorded immutably, and —
 when it needs a human — routed to an analyst whose determination becomes a training label.
 
-**Next:** T-16 (feature expansion) — the schema it needs now exists. T-17 (graph features)
-is also unblocked. Phase D is independent and can run at any time.
+**Next:** T-18 (realistic training data), which now also owns retraining on the 42 features
+and measuring their importance. T-17 (graph features) and T-20 (anomaly layer) are also
+unblocked. Phase D is independent and can run at any time.
 
 **Operational to-dos that are not tasks:** schedule `scripts/expire_challenges.py` (every
 minute is reasonable), and replace `LogSender` with a real delivery channel before any
@@ -99,7 +101,7 @@ exactly — a test pins that.
 
 **Carried debt, not yet a task:** schema changes land while `create_all()` is still the only
 deployment path, so `migrations/` holds hand-written DDL for databases created earlier —
-`001` to `008` so far. `007` also settles any transaction left in
+`001` to `009` so far. `007` also settles any transaction left in
 STEP_UP from before T-14b as rejected, since those customers were never challenged. `003` also opens a case for every transaction already sitting in
 REVIEW, so none stay dead ends. `004` adds a trigger that makes `decision_audits`
 append-only in PostgreSQL, and deliberately does *not* backfill audit rows for older
@@ -200,9 +202,10 @@ endpoint is scoped to `current_user.id`, so users cannot read each other's recor
 
 ### 3.2 Prediction engine
 
-Five weighted rules blended with a `RandomForestClassifier` probability (§2.2). Features are
-computed once in `app/features.py` and passed to the model as a named DataFrame, so the
-training and serving paths cannot drift apart:
+Five weighted rules blended with a `RandomForestClassifier` probability (§2.2). Since T-16,
+42 features are computed once in `app/features.py` for every decision and stored on its
+audit row; the rules read the five baseline features below, and the current model was
+trained on those same five. Retraining on all 42 is T-18:
 
 | Feature | Meaning |
 |---|---|
@@ -241,7 +244,7 @@ which is T-12.
 
 ### 3.5 Testing
 
-482 tests across 21 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
+565 tests across 22 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -512,7 +515,7 @@ it trains on its own predictions.
 
 | Dimension | Current | Target |
 |---|---|---|
-| Features in the model | 5 | 60+ |
+| Features in the model | 5 served to the model; 42 computed and audited (T-16) | 60+ |
 | Training samples | 20 synthetic | 50k+ realistic, imbalanced |
 | Class balance | 50 / 50 | ~0.5% fraud |
 | Scoring latency p99 | unmeasured, but O(1) in history since T-02 | < 100 ms, O(1) |
@@ -663,7 +666,7 @@ Not F1. The operating metrics are:
 | Chargeback and analyst labels | ~~Model's own output used as label~~ `TransactionOutcome`, unwritten until T-12 | ~~T-05~~ ✅ |
 | Full decision audit log | ~~Nothing logged~~ append-only, replayable | ~~T-11~~ ✅ |
 | Graph and ring features | 1-hop device degree only | T-17 |
-| Multi-window velocity | Single 120-second window | T-16 |
+| Multi-window velocity | ~~Single 120-second window~~ six windows, 1m to 30d | ~~T-16~~ ✅ |
 
 ---
 
@@ -680,7 +683,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 482 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 565 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -691,9 +694,12 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 Decisions made while executing Phase A that later tasks must not silently undo.
 
-1. **`compute_features` stays pure.** No database, no clock, no I/O. Aggregates are built by
-   the caller: `transaction_repo.get_user_aggregates` when serving, `aggregates_from_history`
-   when training. T-16 adds features to the same function, never around it.
+1. **`compute_features` stays pure, and aggregates have one implementation.** No database, no
+   clock, no I/O: the instant is `TransactionInput.at`. Aggregates come only from
+   `app/repositories/transaction_repo.py`, through `fraud_detection.features_at`, which
+   serving calls at request time and retraining calls at each row's own timestamp. Every
+   query filters `created_at < at`. Never add a second, Python-side aggregate path: the
+   parity test in `tests/test_training_parity.py` will catch any drift.
 2. **Rule weights are normalised, never clamped.** `final_score` is in [0, 1] because
    `w_rules + w_model == 1.0` — which `config/rules.yaml` validation enforces — not because
    of a `min()`. Changing any rule weight changes the total and therefore rescales every
@@ -739,9 +745,11 @@ Decisions made while executing Phase A that later tasks must not silently undo.
     threads it through every rule and the blend, so a reload mid-request cannot mix two
     versions of the file. The snapshot's parameters go into `ScoreBreakdown.scoring_params`
     and from there into the audit row.
-14. **No model is served without its manifest.** Train on a DataFrame with `FEATURE_ORDER`
-    columns, save through `app/ML/registry.py`, activate explicitly. Never write a
-    `model.pkl` by hand; the registry will refuse to load it.
+14. **No model is served without its manifest.** Train on a DataFrame with named feature
+    columns - all of `FEATURE_ORDER` or a subset - save through `app/ML/registry.py`, and
+    activate explicitly. Serving hands each model exactly the columns its manifest lists.
+    Never write a `model.pkl` by hand; the registry will refuse to load it. Renaming or
+    removing a feature breaks every model that uses it - add, never rename.
 15. **Anything that moves money is idempotent.** `POST /transactions/` honours
     `Idempotency-Key`, and a replay must never rescore, re-audit or reopen a case. Any future
     endpoint that creates a payment-like record — refunds, chargeback ingestion, T-14b's
@@ -754,6 +762,9 @@ Decisions made while executing Phase A that later tasks must not silently undo.
 17. **Card numbers never enter the system.** Only vault tokens are stored, and the API
     rejects any `card_token` that passes the Luhn check as a 13-19 digit number. The same
     rule applies to any future field, log line or audit row that could carry a card number.
+18. **Missing means `None`, normalised at the boundary.** Everything entering feature
+    computation passes through `TransactionInput.from_request`, which turns `NaN`, `pd.NA`
+    and `NaT` into `None`. Never test a DataFrame value with `is not None` anywhere else.
 
 ### 11.3 Definition of done
 
@@ -1423,10 +1434,43 @@ prerequisite for the rest of Phase C.
 
 ---
 
-#### T-16 · Feature expansion
+#### T-16 · Feature expansion — ✅ DONE (`pending`), retraining moved to T-18
 
 **Depends on:** T-15
 **Modify:** `app/features.py`, `app/repositories/transaction_repo.py`
+
+**As built:**
+
+- **42 features** in eight families. `BASELINE_FEATURES` (the original five, which the rules
+  read) lead `FEATURE_ORDER` unchanged, so every existing score is unchanged.
+- **Split by decision (option 3):** the features are built and tested here; retraining on
+  them and measuring importance moved to T-18, because the only training data - 20
+  hand-written rows - describes five features. Importances measured on it would have been
+  recorded and then not trusted.
+- **One aggregate implementation.** Training no longer rebuilds history in Python: it calls
+  the same repository queries as serving, evaluated as of each transaction's own timestamp.
+  Scoring and storage now share one instant, and a test requires retraining to reproduce
+  every audited feature vector exactly, field for field.
+- **Two latent training bugs fixed by that move** (both since T-05): training built history
+  from *labelled* rows only while serving counted all rows, and it counted device sharing
+  across the whole dataset, future users included. Regression tests pin both.
+- **A third caught by the parity test:** pandas 3 reports a missing string as `NaN`, which
+  passes `is not None`, so a transaction with no merchant trained as a first visit to one.
+  `TransactionInput.from_request` now normalises every missing marker at the boundary.
+- **Registry rule changed:** a model may use a *subset* of `FEATURE_ORDER`; serving hands it
+  exactly its own columns. It is refused only if it needs a feature serving does not compute,
+  or its manifest misdescribes its fitted columns. Without this the 5-feature model would
+  have stopped the API from starting.
+- **Four statements per decision**, whatever the history size (was three).
+- **Missing data:** cold-start customers are never penalised (shares read 1.0, first-time
+  flags 0); unknowable values - no previous transaction, no coordinates - are `-1`, never 0.
+  Impossible travel = over 900 km/h across more than 100 km. `is_night` is UTC, since
+  customer time zones are unknown; `typical_hour_share` is the per-customer timing signal.
+- Added `users.created_at` for account age (migration `009` backfills from each account's
+  first transaction). PostgreSQL sessions are pinned to UTC so hour-of-day matches SQLite -
+  set, but untested here, as no PostgreSQL is available to the test suite.
+- `amount_population_percentile` counts over every prior transaction: bounded in statements,
+  but its cost grows with total volume. A precomputed quantile sketch is the fix at scale.
 
 Target: 5 features to 40+. The engine's ceiling is set by features, not by the model.
 
@@ -1442,12 +1486,13 @@ Target: 5 features to 40+. The engine's ceiling is set by features, not by the m
 
 **Acceptance**
 
-- [ ] All features flow through `compute_features` — no exceptions (T-01 invariant preserved)
-- [ ] Implied travel speed implemented; a documented threshold flags physically impossible journeys
-- [ ] `FEATURE_ORDER` updated and the model retrained against it
-- [ ] Aggregates still fetched in a bounded number of queries
-- [ ] Every feature unit-tested, including null and cold-start handling
-- [ ] Feature importance re-measured and recorded in the manifest
+- [x] All features flow through `compute_features` — no exceptions (T-01 invariant preserved)
+- [x] Implied travel speed implemented; a documented threshold flags physically impossible journeys
+- [x] `FEATURE_ORDER` updated — 42 features
+- [ ] ~~The model retrained against it~~ **→ moved to T-18** (no training data carries these features yet)
+- [x] Aggregates still fetched in a bounded number of queries
+- [x] Every feature unit-tested, including null and cold-start handling
+- [ ] ~~Feature importance re-measured and recorded in the manifest~~ **→ moved to T-18**
 
 ---
 
@@ -1506,6 +1551,12 @@ forest collapsed to depth-1 stumps.
 - [ ] Planted attack patterns: card testing, account takeover, a device-sharing ring
 - [ ] Trained trees reach a meaningful depth, not 1 — assert this in a test
 - [ ] Or, alternatively, document ingestion of IEEE-CIS / PaySim instead
+- [ ] *(from T-16)* The model is retrained on the full `FEATURE_ORDER`, through
+      `scripts/retrain.py`'s point-in-time feature path
+- [ ] *(from T-16)* Feature importance measured and recorded in the manifest
+- [ ] Generated data populates every T-15 field, so all 42 features carry signal
+- [ ] Feature building is fast enough for 50k rows: `build_features` issues four queries per
+      row, which is correct but slow at that size - batch it or document the runtime
 
 ---
 
@@ -1593,7 +1644,7 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
                       ├── ✅ T-03 scoring ──┬── ✅ T-04 policy ──┐
                       │                     ├── ✅ T-09 tests    │
                       │                     └── ✅ T-13 registry │
-                      └── ✅ T-08 fix bundle ── ✅ T-15 schema ────┼── T-16 features+
+                      └── ✅ T-08 fix bundle ── ✅ T-15 schema ────┼── ✅ T-16 features+
                                                                   │   └── T-18 data ── T-19 LightGBM
                                                                   │   └── T-20 anomaly
                                                                   └── T-17 graph
@@ -1607,12 +1658,12 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
    Phase D            (independent, can run in parallel throughout)
 ```
 
-**Unblocked right now:** T-16, T-17, and all of Phase D. **Phase B is complete.**
+**Unblocked right now:** T-17, T-18, T-20, and all of Phase D. **Phase B is complete.**
 
 **Phase B order, as executed:** T-10 → T-12 → T-11 → T-13 → T-14 → T-14b.
 
-**Suggested order for Phase C:** ~~T-15~~ → T-16 → T-18 → T-19, with T-17 and T-20 once
-T-16 lands. T-18 (realistic data) is what makes every later model comparison meaningful. That finishes the critical
+**Suggested order for Phase C:** ~~T-15~~ → ~~T-16~~ → T-18 → T-19, then T-17 and T-20.
+T-18 first: it is what makes every later model comparison meaningful. T-18 (realistic data) is what makes every later model comparison meaningful. That finishes the critical
 path (T-12 and T-11 are its last two links) before the supporting work.
 
 **Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11. ✅ **Complete.**

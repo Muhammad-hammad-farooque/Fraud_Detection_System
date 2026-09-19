@@ -9,6 +9,7 @@ import pytest
 
 from app import models
 from app.audit import replay
+from app.features import FEATURE_ORDER, FeatureVector
 from app.models import AuditImmutableError
 from app.routers import transactions as transactions_router
 from scripts.set_role import set_role
@@ -67,9 +68,7 @@ class TestRecording:
     def test_row_carries_everything_needed_to_replay(self, client, people, db_session):
         txn = _pay(client, people, 9000.0)
         audit = _audits(db_session, txn["id"])[0]
-        assert set(audit.feature_vector) == {
-            "amount", "amount_deviation", "is_new_location", "is_flagged_device", "velocity_2m",
-        }
+        assert list(audit.feature_vector) == FEATURE_ORDER      # the full vector, all 42 features
         assert all(set(hit) == {"rule_id", "weight"} for hit in audit.rule_hits)
         assert set(audit.scoring_params) == {"rules_version", "total_rule_weight", "w_rules", "w_model"}
         assert {"allow_below", "step_up_below", "review_below", "high_value_amount"} <= set(audit.policy_config)
@@ -145,6 +144,16 @@ class TestReplay:
         result = replay(_audits(db_session, txn["id"])[0])
         assert result.decision.value == "ALLOW"
         assert result.matches is True
+
+    def test_rows_written_before_t16_still_replay(self, client, people, db_session):
+        """Pre-T-16 audit rows stored only the five baseline features."""
+        txn = _pay(client, people, 9000.0)
+        audit = _audits(db_session, txn["id"])[0]
+        db_session.expunge(audit)
+        audit.feature_vector = {k: audit.feature_vector[k] for k in FEATURE_ORDER[:5]}
+        result = replay(audit)
+        assert result.matches is True
+        assert result.rules_still_agree is True
 
     def test_replay_notices_a_tampered_score(self, client, people, db_session):
         txn = _pay(client, people, 9000.0)

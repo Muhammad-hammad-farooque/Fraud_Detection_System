@@ -1,5 +1,6 @@
 import hashlib
 import json
+from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
@@ -76,7 +77,11 @@ def create_transaction(
             # second case, or count towards the velocity rule (A15).
             return _replay(existing, fingerprint, response)
 
-    breakdown  = score_transaction(db, transaction, current_user.id)
+    # One instant for the whole decision: features are computed as of `now`
+    # and the transaction is stored with it, so retraining reconstructs the
+    # exact feature vector this decision saw.
+    now        = datetime.now(timezone.utc)
+    breakdown  = score_transaction(db, transaction, current_user.id, now=now)
     risk_score = breakdown.final_score
     risk_level = get_risk_level(risk_score)
     policy     = load_policy_config()
@@ -98,6 +103,7 @@ def create_transaction(
         model_version=breakdown.model_version,
         idempotency_key=idempotency_key,
         idempotency_fingerprint=fingerprint,
+        created_at=now,
     )
 
     db.add(new_transaction)
