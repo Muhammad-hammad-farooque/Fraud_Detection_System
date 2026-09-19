@@ -4,10 +4,10 @@ import requests
 import os
 import streamlit as st
 
-BASE_URL = (
-    st.secrets.get("API_BASE_URL")
-    or os.getenv("API_BASE_URL", "http://localhost:8000")
-)
+try:
+    BASE_URL = st.secrets.get("API_BASE_URL") or os.getenv("API_BASE_URL", "http://localhost:8000")
+except Exception:
+    BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 
 def _headers(token: str) -> dict:
