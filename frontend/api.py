@@ -1,3 +1,5 @@
+import uuid
+
 import requests
 import os
 import streamlit as st
@@ -50,13 +52,28 @@ def list_transactions(token: str):
     return _parse(r)
 
 
-def create_transaction(token: str, location: str, amount: float, device_id: str):
-    r = requests.post(
-        f"{BASE_URL}/transactions/",
-        json={"location": location, "amount": amount, "device_id": device_id},
-        headers=_headers(token),
-    )
-    return _parse(r)
+def create_transaction(token: str, location: str, amount: float, device_id: str,
+                       idempotency_key: str | None = None, retries: int = 2):
+    """Submit a payment, retrying network failures with the same Idempotency-Key.
+
+    One key per payment: if a response is lost in transit, the retry returns the
+    transaction the API already created instead of charging and scoring twice.
+    """
+    key = idempotency_key or str(uuid.uuid4())
+    headers = {**_headers(token), "Idempotency-Key": key}
+    for attempt in range(retries + 1):
+        try:
+            r = requests.post(
+                f"{BASE_URL}/transactions/",
+                json={"location": location, "amount": amount, "device_id": device_id},
+                headers=headers,
+                timeout=10,
+            )
+            return _parse(r)
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt == retries:
+                return 0, {"detail": "Could not reach the API. The payment may or may not "
+                                     "have gone through; check your transaction history."}
 
 
 # ── Claims ────────────────────────────────────────────────────────────────────

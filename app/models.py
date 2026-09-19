@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Column, Index, Integer, Float, ForeignKey, String, DateTime, Boolean, event
+from sqlalchemy import JSON, Column, Index, Integer, Float, ForeignKey, String, DateTime, Boolean, UniqueConstraint, event
 from enum import StrEnum
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -38,14 +38,26 @@ class Transaction(Base):
     decision = Column(String, default="ALLOW")
     policy_version = Column(String, nullable=True)
     model_version = Column(String, nullable=True)
+    # Client-supplied retry key (A15). A repeat of the same key by the same
+    # customer returns this row instead of creating and scoring a new one.
+    idempotency_key = Column(String(255), nullable=True)
+    # Hash of the request body the key was first used with. The same key sent
+    # with a different payment is a client bug, and is refused rather than
+    # silently answered with the old payment.
+    idempotency_fingerprint = Column(String(64), nullable=True)
     # `decision` is what the engine decided and is never rewritten - the audit
     # trail depends on it. When an analyst resolves a review, the outcome lands
     # here instead: ALLOW if the transaction was legitimate, REJECT if fraud.
     resolved_decision = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-    # Every scoring query filters on exactly this pair.
-    __table_args__ = (Index("ix_txn_user_created", "user_id", "created_at"),)
+    __table_args__ = (
+        # Every scoring query filters on exactly this pair.
+        Index("ix_txn_user_created", "user_id", "created_at"),
+        # One transaction per customer per key. NULL keys never collide, so
+        # requests without the header are unaffected.
+        UniqueConstraint("user_id", "idempotency_key", name="uq_txn_user_idempotency_key"),
+    )
 
     user = relationship("User", back_populates="transactions")
     claims = relationship("Claim", back_populates="transaction")

@@ -6,7 +6,7 @@
 | **Version** | 0.1.0 |
 | **Status** | Working prototype — not production ready. Phase A complete; Phase B in progress. |
 | **Last reviewed** | 2026-09-19 |
-| **Progress** | 13 / 34 tasks · 14 / 18 defects fixed, A13 half-fixed — critical path complete — see §1.4 |
+| **Progress** | 14 / 34 tasks · 15 / 18 defects fixed, A13 half-fixed — critical path complete — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -68,12 +68,13 @@ and its acceptance boxes ticked in §12.
 | T-12 · Analyst case queue | `f50ea16` | A13 (REVIEW / MANUAL_REVIEW) |
 | T-11 · Immutable decision audit trail | `969e0f0` | P6 |
 | T-13 · Model registry and config-driven rules | `2d2550c` | — |
+| T-14 · Idempotency | `pending` | A15 |
 
-**Suite:** 392 tests, 99% coverage of `app/`, a little over a minute (four tests start the
+**Suite:** 416 tests, 99% coverage of `app/`, a little over a minute (four tests start the
 API in a subprocess to prove startup checks).
 
 **Still open:** A9 (weak training data, T-18), A13's `STEP_UP` half (T-14b, added during
-T-12), A15 (no idempotency, T-14), A18 (`networkx` unused — kept deliberately, T-17 uses it).
+T-12), A18 (`networkx` unused — kept deliberately, T-17 uses it).
 
 **The label loop is closed.** Resolving a case writes an ANALYST `TransactionOutcome`,
 which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs at least
@@ -83,7 +84,7 @@ which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs
 is now scored on one feature path, decided by a separate policy, recorded immutably, and —
 when it needs a human — routed to an analyst whose determination becomes a training label.
 
-**Next:** T-14 (idempotency) and T-14b (step-up flow) finish Phase B. T-15 opens Phase C.
+**Next:** T-14b (step-up flow) finishes Phase B. T-15 opens Phase C.
 
 **Retuning:** edit `config/rules.yaml`. It is validated before use and picked up on the next
 request. The first version is `rules-1` / `policy-1`, which reproduces the pre-T-13 numbers
@@ -91,7 +92,7 @@ exactly — a test pins that.
 
 **Carried debt, not yet a task:** schema changes land while `create_all()` is still the only
 deployment path, so `migrations/` holds hand-written DDL for databases created earlier —
-`001` to `005` so far. `003` also opens a case for every transaction already sitting in
+`001` to `006` so far. `003` also opens a case for every transaction already sitting in
 REVIEW, so none stay dead ends. `004` adds a trigger that makes `decision_audits`
 append-only in PostgreSQL, and deliberately does *not* backfill audit rows for older
 transactions: their feature vectors were never stored, and a reconstructed record would look
@@ -229,7 +230,7 @@ which is T-12.
 
 ### 3.5 Testing
 
-392 tests across 17 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
+416 tests across 19 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -270,7 +271,7 @@ These are defects in existing code, not missing features.
 | ~~A12~~ | ~~**Naive datetime columns.** `Column(DateTime)` without `timezone=True`, forcing scattered `.replace(tzinfo=utc)` patches at every use site.~~ **Resolved by T-08.** | `app/models.py` |
 | A13 | ~~**Dead decision states.** `REVIEW` and `MANUAL_REVIEW` are terminal — no code path can resolve them.~~ **Resolved by T-12** via the case queue. **Still open for `STEP_UP`** (since T-04): no task builds the step-up authentication flow that would complete or abandon it — see T-14b. | system-wide |
 | ~~A14~~ | ~~**Claim amount unvalidated server-side.** The backend accepts any amount regardless of the transaction's value; only the frontend enforces a maximum.~~ **Resolved by T-08.** | `app/routers/claims.py` |
-| A15 | **No idempotency.** A retried POST creates a duplicate transaction and falsely inflates the velocity rule. | `app/routers/transactions.py` |
+| ~~A15~~ | ~~**No idempotency.** A retried POST creates a duplicate transaction and falsely inflates the velocity rule.~~ **Resolved by T-14.** | `app/routers/transactions.py` |
 | ~~A16~~ | ~~**No cold-start handling.** A user's first transaction always has empty known locations, so `is_new_location` fires for every new customer.~~ **Resolved by T-01.** | `app/fraud_detection.py` |
 | ~~A17~~ | ~~**Test DB is file-based, not in-memory** as the docstring and README both claim. File-based SQLite can leak state between runs.~~ **Resolved by T-09.** | `tests/conftest.py` |
 | A18 | **`networkx` declared but never imported.** Dead dependency. **Kept deliberately: T-17 uses it for graph features.** | `pyproject.toml` |
@@ -356,7 +357,7 @@ because the columns do not exist. Add: `merchant_id`, `merchant_category`, `curr
 | ~~**Config-driven thresholds**~~ **Done, T-13** | `5000`, `0.4`, `0.3/0.7` are hardcoded. Risk teams retune weekly; that cannot require a deploy. |
 | **Blocklists / allowlists** | Known-bad devices and locations; trusted-customer bypass |
 | **Chargeback ingestion** | The authoritative fraud label source in payments |
-| **Idempotency keys** | Payment systems retry (defect A15) |
+| ~~**Idempotency keys**~~ **Done, T-14** | Payment systems retry (defect A15) |
 | **Customer notification** | Nothing currently informs a user that a transaction was blocked |
 | **Shadow mode** | Run the challenger against live traffic without acting, compare, then promote. Current single-split AUC promotion is fragile. |
 | **Drift detection** | PSI/KS tests on input feature distributions. `monitor.py` only watches output performance, which degrades weeks after the inputs do. |
@@ -668,7 +669,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 392 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 416 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -728,6 +729,11 @@ Decisions made while executing Phase A that later tasks must not silently undo.
 14. **No model is served without its manifest.** Train on a DataFrame with `FEATURE_ORDER`
     columns, save through `app/ML/registry.py`, activate explicitly. Never write a
     `model.pkl` by hand; the registry will refuse to load it.
+15. **Anything that moves money is idempotent.** `POST /transactions/` honours
+    `Idempotency-Key`, and a replay must never rescore, re-audit or reopen a case. Any future
+    endpoint that creates a payment-like record — refunds, chargeback ingestion, T-14b's
+    challenge completion — follows the same pattern: check the key, then rely on a unique
+    constraint to settle races, with the whole write inside one database transaction.
 
 ### 11.3 Definition of done
 
@@ -1283,19 +1289,31 @@ def load_model(version: str | None = None) -> tuple[Any, ModelManifest]:
 
 ---
 
-#### T-14 · Idempotency
+#### T-14 · Idempotency — ✅ DONE (`pending`)
 
 **Depends on:** none
 **Fixes:** A15
 **Modify:** `app/routers/transactions.py`, `app/schemas.py`
 
+**As built:**
+
+- Follows the IETF Idempotency-Key draft: the same key sent with a *different* payment is
+  refused with 422 rather than answered with the old one, which would silently drop a real
+  payment from a buggy client. A replay carries `Idempotent-Replayed: true`.
+- Concurrent duplicates are settled by the unique constraint: the loser's transaction,
+  audit row and case roll back together and it returns the winner.
+- A replay returns the transaction's *current* state, so `resolved_decision` may have been
+  filled in since the first response. Every field the engine wrote is unchanged.
+- Keys do not expire. Stripe-style 24-hour expiry would need a cleanup job and is not built.
+- The Streamlit client sends one key per payment and retries network failures with it.
+
 **Acceptance**
 
-- [ ] `Idempotency-Key` header accepted on `POST /transactions/`
-- [ ] A repeat key returns the original response without rescoring
-- [ ] Unique constraint on `(user_id, idempotency_key)`
-- [ ] Retries no longer inflate the velocity feature
-- [ ] Test: the same key twice yields one transaction and identical responses
+- [x] `Idempotency-Key` header accepted on `POST /transactions/`
+- [x] A repeat key returns the original response without rescoring
+- [x] Unique constraint on `(user_id, idempotency_key)`
+- [x] Retries no longer inflate the velocity feature
+- [x] Test: the same key twice yields one transaction and identical responses
 
 ---
 
@@ -1526,14 +1544,14 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
                    └── ✅ T-12 case queue
 ✅ T-10 RBAC ─────────┘
 ✅ T-03 + ✅ T-04 ── ✅ T-11 audit trail
-   T-14 idempotency   (independent)
+✅ T-14 idempotency   (independent)
 ✅ T-04 ── T-14b step-up auth   (added during T-12)
    Phase D            (independent, can run in parallel throughout)
 ```
 
-**Unblocked right now:** T-14, T-14b, T-15, and all of Phase D.
+**Unblocked right now:** T-14b, T-15, and all of Phase D.
 
-**Suggested order for Phase B:** ~~T-10~~ → ~~T-12~~ → ~~T-11~~ → ~~T-13~~ → T-14 → T-14b. That finishes the critical
+**Suggested order for Phase B:** ~~T-10~~ → ~~T-12~~ → ~~T-11~~ → ~~T-13~~ → ~~T-14~~ → T-14b. That finishes the critical
 path (T-12 and T-11 are its last two links) before the supporting work.
 
 **Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11. ✅ **Complete.**
