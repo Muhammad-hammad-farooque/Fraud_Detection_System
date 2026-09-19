@@ -82,13 +82,17 @@ class TestFraudRules:
 
     def test_predicted_fraud_true_for_high_risk(self, client, auth_headers):
         """A transaction that clears the HIGH threshold should be marked predicted_fraud=True."""
-        # Fires R1 (amount > 5000), R2 (90x the user's average), R3 (new location)
-        # and R4 (shared device). After T-03 those four weights normalise to
-        # 1.0/1.5 of the rule half of the score, which clears HIGH once the model
-        # agrees; the correlated pair R1+R2 alone no longer would (A6).
+        # Fires all five rules: R1 (amount > 5000), R2 (90x the user's average),
+        # R3 (new location), R4 (shared device) and R5 (five payments in two
+        # minutes). The rule half of the score is then exactly 0.7, which clears
+        # HIGH whatever the model says. Until T-18 this test fired four rules and
+        # relied on the model rating a large amount as fraud; the model trained on
+        # realistic data no longer treats amount alone as proof, and this test is
+        # about the policy, not the model.
         # The user needs prior history: a first-ever transaction gets no deviation or
         # new-location penalty (cold start, A16).
-        client.post("/transactions/", json=BASE_TX, headers=auth_headers)
+        for _ in range(5):
+            client.post("/transactions/", json=BASE_TX, headers=auth_headers)
         # Register three more users on the same device to trigger the shared-device rule
         client.post("/auth/register", json={"name": "U2", "email": "u2@test.com", "password": "p"})
         r2 = client.post("/auth/login", json={"email": "u2@test.com", "password": "p"})

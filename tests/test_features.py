@@ -65,7 +65,7 @@ COLD = UserAggregates(txn_count=0, avg_amount=0.0, known_locations=frozenset(), 
 def _fv(txn=None, user=None, device=None, population=None) -> FeatureVector:
     return compute_features(txn or _txn(), user or _user(),
                             device or DeviceAggregates(user_count=1, first_seen_at=AT - timedelta(days=30)),
-                            population or PopulationAggregates(amount_rank=50, total_count=100))
+                            population or PopulationAggregates(amount_percentile=0.5))
 
 
 # ── Schema ───────────────────────────────────────────────────────────────────
@@ -235,7 +235,7 @@ class TestAmountShape:
         assert _fv(user=user).amount_zscore == 0.0
 
     def test_population_percentile(self):
-        assert _fv(population=PopulationAggregates(amount_rank=90, total_count=100)).amount_population_percentile == 0.9
+        assert _fv(population=PopulationAggregates(amount_percentile=0.9)).amount_population_percentile == 0.9
 
     def test_percentile_is_the_median_with_no_population(self):
         assert _fv(population=PopulationAggregates()).amount_population_percentile == 0.5
@@ -281,7 +281,7 @@ class TestMerchant:
         assert _fv().merchant_fraud_rate == pytest.approx(MERCHANT_PRIOR_RATE)
 
     def test_rate_is_smoothed_toward_the_prior(self):
-        population = PopulationAggregates(amount_rank=0, total_count=1, merchant_labelled=10, merchant_fraud=5)
+        population = PopulationAggregates(merchant_labelled=10, merchant_fraud=5)
         expected = (5 + MERCHANT_PRIOR_WEIGHT * MERCHANT_PRIOR_RATE) / (10 + MERCHANT_PRIOR_WEIGHT)
         assert _fv(population=population).merchant_fraud_rate == pytest.approx(expected)
 

@@ -59,7 +59,7 @@ fraud-detection-system/
 │   ├── services/
 │   │   └── fraud_services.py    # risk level, decision, device fraud, claim verification
 │   ├── ML/
-│   │   ├── train_model.py       # Model training script
+│   │   ├── train_model.py       # Trains the shipped model on synthetic data
 │   │   ├── models.py            # predict_fraud() inference function
 │   │   ├── registry.py          # Versioned models, each with a manifest
 │   │   └── artifacts/           # <version>/model.pkl + manifest.json, and ACTIVE
@@ -85,6 +85,7 @@ fraud-detection-system/
 │   └── test_users.py            # User endpoint tests
 ├── scripts/
 │   ├── retrain.py               # Retraining pipeline (champion/challenger)
+│   ├── generate_data.py         # Realistic synthetic training data (50k rows, ~0.7% fraud)
 │   └── monitor.py               # Daily performance monitor
 ├── logs/                        # Auto-generated log files
 ├── populate_db.py               # Seed database with dummy data
@@ -139,10 +140,13 @@ cp .env.example .env
 # Edit .env with your PostgreSQL connection string and a strong SECRET_KEY
 ```
 
-**3. Train the ML model**
+**3. Train the ML model** (optional — a trained model ships in `app/ML/artifacts/`)
 ```bash
-python app/ML/train_model.py
+python -m app.ML.train_model
 ```
+Generates 50,000 synthetic transactions into `data/synthetic.db` (never your real database),
+builds point-in-time features, and promotes the new model only if it beats the active one.
+Allow about ten minutes; `--transactions 5000` gives a quicker, smaller run.
 
 **4. Start the API**
 ```bash
@@ -253,11 +257,15 @@ Step 3 — Pattern matching
 python -m scripts.retrain
 ```
 
-1. Loads all transactions with confirmed outcomes from approved/rejected claims
-2. Recomputes features preserving temporal order (no data leakage)
-3. Trains a new RandomForestClassifier on an 80/20 train/test split
-4. Compares AUC-ROC of new model vs current deployed model
-5. Registers and activates the new model only if it wins (champion/challenger)
+1. Loads transactions with confirmed outcomes (analyst review, chargebacks) — never claim status
+2. Drops labels younger than 90 days, which may still receive a chargeback
+3. Recomputes all 42 features with the same queries serving uses, as of each transaction's
+   own timestamp, so no feature can see the future
+4. Splits chronologically — training rows strictly precede test rows
+5. Trains a class-balanced RandomForestClassifier and reports AUC, PR-AUC and recall at 1%
+   false-positive rate, plus permutation feature importance
+6. Registers and activates the new model only if it beats the active one on the same
+   held-out window (champion/challenger)
 
 All decisions are logged to `logs/retrain.log`.
 

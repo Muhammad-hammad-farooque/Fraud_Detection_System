@@ -6,7 +6,7 @@
 | **Version** | 0.1.0 |
 | **Status** | Working prototype — not production ready. Phases A and B complete. |
 | **Last reviewed** | 2026-09-19 |
-| **Progress** | 17 / 34 tasks · 16 / 18 defects fixed — Phases A and B complete, C under way — see §1.4 |
+| **Progress** | 18 / 34 tasks · 17 / 18 defects fixed — Phases A and B complete, C under way — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -72,12 +72,13 @@ and its acceptance boxes ticked in §12.
 | T-14b · Step-up authentication flow | `25c6a57` | A13 (`STEP_UP`) |
 | T-15 · Expand the transaction schema | `2a847d1` | prerequisite for T-16, T-17 |
 | T-16 · Feature expansion (retraining moved to T-18) | `05d6902` | two training bugs from T-05 |
+| T-18 · Realistic training data, model retrained on 42 features | `pending` | A9 |
 
-**Suite:** 565 tests, 99% coverage of `app/`, under two minutes (four tests start the API
-in a subprocess to prove startup checks).
+**Suite:** 606 tests plus 1 expected failure (strict amount monotonicity, for T-19), about
+three minutes: two modules generate and train on real data, and four tests start the API in
+a subprocess to prove startup checks.
 
-**Still open:** A9 (weak training data, T-18) and A18 (`networkx` unused — kept
-deliberately, T-17 uses it). Both close in Phase C.
+**Still open:** A18 only (`networkx` unused — kept deliberately, T-17 uses it).
 
 **The label loop is closed.** Resolving a case writes an ANALYST `TransactionOutcome`,
 which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs at least
@@ -87,9 +88,12 @@ which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs
 is now scored on one feature path, decided by a separate policy, recorded immutably, and —
 when it needs a human — routed to an analyst whose determination becomes a training label.
 
-**Next:** T-18 (realistic training data), which now also owns retraining on the 42 features
-and measuring their importance. T-17 (graph features) and T-20 (anomaly layer) are also
-unblocked. Phase D is independent and can run at any time.
+**Next:** T-19 (LightGBM with calibration), which also inherits strict amount monotonicity.
+T-17 (graph features) and T-20 (anomaly layer) are unblocked too. Phase D is independent.
+
+**The shipped model changed in T-18.** It scores with 42 features and was trained on
+synthetic data; its metrics are real only for that data. Decisions made before T-18 used the
+baseline and still replay exactly - the audit trail stores the model version per decision.
 
 **Operational to-dos that are not tasks:** schedule `scripts/expire_challenges.py` (every
 minute is reasonable), and replace `LogSender` with a real delivery channel before any
@@ -101,7 +105,7 @@ exactly — a test pins that.
 
 **Carried debt, not yet a task:** schema changes land while `create_all()` is still the only
 deployment path, so `migrations/` holds hand-written DDL for databases created earlier —
-`001` to `009` so far. `007` also settles any transaction left in
+`001` to `010` so far. `007` also settles any transaction left in
 STEP_UP from before T-14b as rejected, since those customers were never challenged. `003` also opens a case for every transaction already sitting in
 REVIEW, so none stay dead ends. `004` adds a trigger that makes `decision_audits`
 append-only in PostgreSQL, and deliberately does *not* backfill audit rows for older
@@ -202,10 +206,10 @@ endpoint is scoped to `current_user.id`, so users cannot read each other's recor
 
 ### 3.2 Prediction engine
 
-Five weighted rules blended with a `RandomForestClassifier` probability (§2.2). Since T-16,
-42 features are computed once in `app/features.py` for every decision and stored on its
-audit row; the rules read the five baseline features below, and the current model was
-trained on those same five. Retraining on all 42 is T-18:
+Five weighted rules blended with a `RandomForestClassifier` probability (§2.2). 42 features
+are computed once in `app/features.py` for every decision and stored on its audit row. The
+rules read the five baseline features below; the model, trained on synthetic data in T-18,
+reads all 42:
 
 | Feature | Meaning |
 |---|---|
@@ -244,7 +248,7 @@ which is T-12.
 
 ### 3.5 Testing
 
-565 tests across 22 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
+606 tests across 24 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -279,7 +283,7 @@ These are defects in existing code, not missing features.
 | ~~A6~~ | ~~**Correlated rules double-count.** Rules 1 and 2 (high amount, high deviation) almost always fire together, producing 0.8 and an instant REJECT. A false-positive generator.~~ **Resolved by T-03.** | `app/fraud_detection.py` |
 | ~~A7~~ | ~~**Unbounded history load.** Scoring calls `.all()` on the user's entire transaction history and iterates it in Python — O(n) latency and memory per request.~~ **Resolved by T-02.** | `app/routers/transactions.py:22` |
 | ~~A8~~ | ~~**Feature logic triplicated.** Computed independently in `fraud_detection.py`, `retrain.py:build_features`, and `train_model.py`. Guaranteed train/serve skew.~~ **Resolved by T-01.** | three files |
-| A9 | **Model has no real signal.** Trained on 20 hand-written rows that are perfectly separable on amount alone (legit <= 400, fraud >= 5000), fit on 100% of the data with no holdout. | `app/ML/train_model.py` |
+| ~~A9~~ | ~~**Model has no real signal.** Trained on 20 hand-written rows that are perfectly separable on amount alone (legit <= 400, fraud >= 5000), fit on 100% of the data with no holdout.~~ **Resolved by T-18.** | `app/ML/train_model.py` |
 | A10 | **Uncalibrated probabilities used arithmetically.** RandomForest `predict_proba` is poorly calibrated, yet is multiplied by 0.3 and summed into the score as if it were a true probability. | `app/fraud_detection.py` |
 | ~~A11~~ | ~~**Feature-name mismatch.** A bare numpy array is passed to a model fitted on a DataFrame — emits a warning and relies silently on positional order.~~ **Resolved by T-08.** | `app/ML/models.py:15` |
 | ~~A12~~ | ~~**Naive datetime columns.** `Column(DateTime)` without `timezone=True`, forcing scattered `.replace(tzinfo=utc)` patches at every use site.~~ **Resolved by T-08.** | `app/models.py` |
@@ -515,11 +519,11 @@ it trains on its own predictions.
 
 | Dimension | Current | Target |
 |---|---|---|
-| Features in the model | 5 served to the model; 42 computed and audited (T-16) | 60+ |
-| Training samples | 20 synthetic | 50k+ realistic, imbalanced |
-| Class balance | 50 / 50 | ~0.5% fraud |
+| Features in the model | 42 (T-18) | 60+ |
+| Training samples | ✅ 50k generated, realistic and imbalanced (T-18) | 50k+ realistic, imbalanced |
+| Class balance | ✅ 0.70% fraud (T-18) | ~0.5% fraud |
 | Scoring latency p99 | unmeasured, but O(1) in history since T-02 | < 100 ms, O(1) |
-| Recall at fixed 1% FPR | unmeasured | > 70% |
+| Recall at fixed 1% FPR | 88.9% on synthetic held-out data; unmeasured on real data | > 70% |
 | Label source | analyst confirmations via T-12; chargeback ingestion not yet built | analyst confirmations + chargebacks |
 | Decision auditability | ✅ full feature vector, rule trace and parameters per decision, replayable (T-11) | full feature vector and rule trace per decision |
 | Manual review resolution | ✅ analyst queue with SLA (T-12), API only | analyst queue with SLA |
@@ -657,7 +661,7 @@ Not F1. The operating metrics are:
 
 | Industry practice | This project today | Task |
 |---|---|---|
-| GBDT primary scorer | Degenerate RandomForest depth-1 stumps | T-19 |
+| GBDT primary scorer | ~~Degenerate RandomForest depth-1 stumps~~ a real forest on 42 features (T-18); GBDT is T-19 | T-19 |
 | Feature store, one code path | ~~Features computed in three places~~ one path, `app/features.py` | ~~T-01~~ ✅ |
 | Streaming velocity counters | ~~In-Python scan of full history~~ bounded SQL; Redis still T-33 | ~~T-02~~ ✅ |
 | Policy layer separate from model | ~~Thresholds fused into the scorer~~ `app/policy.py` | ~~T-04~~ ✅ |
@@ -683,7 +687,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 565 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 606 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -765,6 +769,14 @@ Decisions made while executing Phase A that later tasks must not silently undo.
 18. **Missing means `None`, normalised at the boundary.** Everything entering feature
     computation passes through `TransactionInput.from_request`, which turns `NaN`, `pd.NA`
     and `NaT` into `None`. Never test a DataFrame value with `is not None` anywhere else.
+19. **Synthetic data stays quarantined.** `scripts/generate_data.py` writes only to a database
+    holding nothing but `@synthetic.invalid` accounts, and labels only with `SYNTHETIC`
+    outcomes. Never point it at the application database, and never report a metric
+    measured on synthetic data without saying so.
+20. **A model is promoted by the gate, not by hand.** `app/ML/train_model.py` and
+    `scripts/retrain.py` both go through `retrain.run`: chronological split, held-out
+    metrics, and promotion only when the challenger's AUC beats the active model's on the
+    same window. Keep the previous model registered so the comparison stays inspectable.
 
 ### 11.3 Definition of done
 
@@ -1532,7 +1544,7 @@ class GraphFeatures:
 
 ---
 
-#### T-18 · Realistic training data
+#### T-18 · Realistic training data — ✅ DONE (`pending`)
 
 **Depends on:** T-16
 **Fixes:** A9
@@ -1542,20 +1554,67 @@ class GraphFeatures:
 The current 20 hand-written rows are perfectly separable on amount alone, which is why the
 forest collapsed to depth-1 stumps.
 
+**As built:**
+
+- `scripts/generate_data.py`: 50,000 transactions for 1,000 customers over a year, 0.70%
+  fraud, deterministic under a seed, in about 10 seconds. It writes only to a database that
+  holds nothing but synthetic data (`data/synthetic.db` by default, git-ignored), marks every
+  account `@synthetic.invalid`, and labels every row with a `SYNTHETIC` outcome, so
+  synthetic labels cannot reach a real database.
+- **The first version was too easy: AUC 1.000**, every permutation importance zero. Amounts
+  overlapped, but every attack left a fingerprint no customer ever produced. Hard cases fixed
+  it, in both directions: legitimate phone upgrades, borrowed devices, VPN purchases that
+  geolocate abroad (so impossible travel fires on real customers), 0.99 app purchases,
+  remittance wires and trips to attacker cities; and fraud on the victim's own device, from
+  local attackers, in the daytime. Some takeovers follow a genuine purchase at home by
+  minutes, which is what makes impossible travel appear at all.
+- Training runs through `scripts/retrain.py` — now callable on any database — so the shipped
+  model was produced by the same point-in-time feature path, chronological split and
+  champion/challenger gate as any future retrain. `python -m app.ML.train_model` does the
+  whole run: **under 5 minutes** for 50,000 rows, 259 s of it feature building.
+- Getting there took two optimisations: statements are built once and reused with bound
+  parameters (Python was rebuilding a 35-expression query per row, 4x the cost of running
+  it), and the population amount percentile became a **daily quantile snapshot** — ranked
+  against everything before the start of the UTC day, computed once per day and cached —
+  instead of an exact count over every prior row, which made retraining quadratic. First
+  estimate before either: 39 minutes.
+- The challenger is a class-balanced `RandomForestClassifier` (150 trees, depth <= 14),
+  a 2.3 MB artifact. The 20-row baseline stays registered, inactive, for comparison.
+- **Result on the held-out window** (the last 10,000 rows by time, 72 fraud):
+
+  | | Baseline, 5 features / 20 rows | Shipped, 42 features / 40k rows |
+  |---|---|---|
+  | AUC | 0.633 | **0.990** |
+  | PR-AUC | 0.043 | **0.871** |
+  | Recall at 1% FPR | 13.9% | **88.9%** |
+
+  Top permutation importances: `is_card_not_present`, `is_first_time_merchant`,
+  `seconds_since_previous`, `km_from_previous`, `location_share`, `device_age_days`.
+- **These numbers describe synthetic data with patterns this project planted.** They show the
+  pipeline and features work; they say nothing yet about real fraud. Real performance is
+  unknown until analyst and chargeback labels accumulate (T-12, chargeback ingestion).
+- **Found by the new model: amount monotonicity no longer holds strictly.** The forest's
+  probability wobbles between trees, so raising an amount from 301 to 1,000 lowered one score
+  by 0.0001. The rule score is still exactly monotone and the full score stays within 0.01;
+  the strict test is kept as `xfail(strict=True)` and moved to T-19, whose LightGBM supports
+  monotone constraints.
+- One API test relied on the old model rating any large amount as fraud. It now fires all
+  five rules, so it tests the policy rather than a model's opinion.
+
 **Acceptance**
 
-- [ ] At least 50,000 generated transactions
-- [ ] Fraud rate between 0.5% and 1%, not 50%
-- [ ] Fraud and legitimate amount distributions **overlap** — separability must not be trivial
-- [ ] Realistic temporal structure: diurnal pattern, weekday and weekend variation
-- [ ] Planted attack patterns: card testing, account takeover, a device-sharing ring
-- [ ] Trained trees reach a meaningful depth, not 1 — assert this in a test
-- [ ] Or, alternatively, document ingestion of IEEE-CIS / PaySim instead
-- [ ] *(from T-16)* The model is retrained on the full `FEATURE_ORDER`, through
+- [x] At least 50,000 generated transactions
+- [x] Fraud rate between 0.5% and 1%, not 50%
+- [x] Fraud and legitimate amount distributions **overlap** — separability must not be trivial
+- [x] Realistic temporal structure: diurnal pattern, weekday and weekend variation
+- [x] Planted attack patterns: card testing, account takeover, a device-sharing ring
+- [x] Trained trees reach a meaningful depth, not 1 — assert this in a test
+- [x] ~~Or, alternatively, document ingestion of IEEE-CIS / PaySim instead~~ not needed: generated data chosen
+- [x] *(from T-16)* The model is retrained on the full `FEATURE_ORDER`, through
       `scripts/retrain.py`'s point-in-time feature path
-- [ ] *(from T-16)* Feature importance measured and recorded in the manifest
-- [ ] Generated data populates every T-15 field, so all 42 features carry signal
-- [ ] Feature building is fast enough for 50k rows: `build_features` issues four queries per
+- [x] *(from T-16)* Feature importance measured and recorded in the manifest
+- [x] Generated data populates every T-15 field, so all 42 features carry signal
+- [x] Feature building is fast enough for 50k rows: `build_features` issues four queries per
       row, which is correct but slow at that size - batch it or document the runtime
 
 ---
@@ -1588,6 +1647,11 @@ calibrated = CalibratedClassifierCV(model, method="isotonic", cv="prefit")
 - [ ] Inference latency measured and under 10 ms
 - [ ] AUC and recall-at-1%-FPR compared against the RandomForest baseline, both logged
 - [ ] Calibration verified: among transactions scored ~0.7, roughly 70% are actually fraud
+- [ ] *(from T-18)* Monotone constraints on the amount features, so a higher amount never
+      lowers the score; remove the `xfail` from
+      `test_raising_the_amount_never_lowers_the_score` once it passes
+- [ ] Beat the shipped forest (AUC 0.990, PR-AUC 0.871 on the synthetic held-out window)
+      through the same champion/challenger gate
 
 ---
 
@@ -1645,7 +1709,7 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
                       │                     ├── ✅ T-09 tests    │
                       │                     └── ✅ T-13 registry │
                       └── ✅ T-08 fix bundle ── ✅ T-15 schema ────┼── ✅ T-16 features+
-                                                                  │   └── T-18 data ── T-19 LightGBM
+                                                                  │   └── ✅ T-18 data ── T-19 LightGBM
                                                                   │   └── T-20 anomaly
                                                                   └── T-17 graph
 ✅ T-05 outcomes ──┬── ✅ T-06 chronological split
@@ -1658,12 +1722,11 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
    Phase D            (independent, can run in parallel throughout)
 ```
 
-**Unblocked right now:** T-17, T-18, T-20, and all of Phase D. **Phase B is complete.**
+**Unblocked right now:** T-17, T-19, T-20, and all of Phase D. **Phase B is complete.**
 
 **Phase B order, as executed:** T-10 → T-12 → T-11 → T-13 → T-14 → T-14b.
 
-**Suggested order for Phase C:** ~~T-15~~ → ~~T-16~~ → T-18 → T-19, then T-17 and T-20.
-T-18 first: it is what makes every later model comparison meaningful. T-18 (realistic data) is what makes every later model comparison meaningful. That finishes the critical
+**Suggested order for Phase C:** ~~T-15~~ → ~~T-16~~ → ~~T-18~~ → T-19, then T-17 and T-20. T-18 (realistic data) is what makes every later model comparison meaningful. That finishes the critical
 path (T-12 and T-11 are its last two links) before the supporting work.
 
 **Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11. ✅ **Complete.**

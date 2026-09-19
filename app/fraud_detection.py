@@ -15,7 +15,8 @@ def features_at(db, candidate: TransactionInput, user_id: int) -> FeatureVector:
 
     The only way features are computed - by live scoring at request time, and
     by retraining at each historical transaction's own timestamp. Four
-    statements, whatever the history size.
+    statements, whatever the history size - plus one on the first decision of
+    each UTC day, to snapshot the population's amount distribution.
     """
     return compute_features(
         candidate,

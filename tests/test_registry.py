@@ -168,16 +168,29 @@ class TestSkewTripwire:
 
 
 class TestShippedModel:
+    """The model in app/ML/artifacts, trained on synthetic data by T-18."""
+
     def test_the_active_shipped_model_loads_and_matches_serving(self):
         model, manifest = load_model()
-        assert manifest.feature_order == BASELINE_FEATURES
-        assert set(manifest.feature_order) <= set(FEATURE_ORDER)
+        assert manifest.feature_order == FEATURE_ORDER          # all 42 features
         assert manifest.version == MODEL_VERSION == MANIFEST.version
 
-    def test_shipped_metric_is_labelled_in_sample(self):
-        """20 rows, fitted and scored on the same data: never present that as a holdout AUC."""
-        assert set(MANIFEST.metrics) == {"in_sample_auc"}
-        assert MANIFEST.training_rows == 20
+    def test_shipped_model_was_trained_and_measured_properly(self):
+        """Held-out metrics, not in-sample ones, and on realistic volume."""
+        assert "in_sample_auc" not in MANIFEST.metrics
+        assert {"auc", "average_precision", "recall_at_1pct_fpr", "test_rows"} <= set(MANIFEST.metrics)
+        assert MANIFEST.training_rows >= 40_000
+        assert MANIFEST.metrics["auc"] > MANIFEST.metrics["champion_auc"]     # it won its promotion
+
+    def test_shipped_model_records_what_it_relies_on(self):
+        assert set(MANIFEST.feature_importance) == set(FEATURE_ORDER)
+
+    def test_the_baseline_is_kept_for_comparison(self):
+        """The 20-row baseline stays registered, inactive, so its failure stays inspectable."""
+        baseline = [v for v in list_versions() if v != MODEL_VERSION]
+        assert baseline
+        _, manifest = load_model(baseline[0])
+        assert manifest.feature_order == BASELINE_FEATURES and manifest.training_rows == 20
 
 
 class TestVersionStamping:

@@ -14,7 +14,7 @@ the columns its manifest lists.
 """
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,6 +37,9 @@ class ModelManifest:
     metrics: dict[str, float]
     training_rows: int
     algorithm: str
+    # Permutation importance on the held-out window (T-18). Empty for models
+    # registered before it was recorded.
+    feature_importance: dict[str, float] = field(default_factory=dict)
 
     def to_json(self) -> str:
         data = asdict(self)
@@ -96,6 +99,7 @@ def save_model(
     trained_at: datetime | None = None,
     version: str | None = None,
     root: Path | None = None,
+    feature_importance: dict[str, float] | None = None,
 ) -> ModelManifest:
     """Write a model and its manifest as a new version. Does not activate it."""
     trained_at = trained_at or datetime.now(timezone.utc)
@@ -109,6 +113,7 @@ def save_model(
         metrics={name: float(value) for name, value in metrics.items()},
         training_rows=int(training_rows),
         algorithm=algorithm,
+        feature_importance={name: float(value) for name, value in (feature_importance or {}).items()},
     )
     _check_feature_order(model, manifest)       # refuse to store a model that could never load
 

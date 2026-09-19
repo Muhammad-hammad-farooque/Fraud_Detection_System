@@ -1,52 +1,77 @@
+"""
+Train the shipped model on realistic synthetic data (T-18).
+
+The model used to be fitted on 20 hand-written rows that were perfectly
+separable on amount alone (A9). It is now trained the way every future model
+will be: through scripts/retrain.py, on point-in-time features computed by the
+same queries serving uses, with a chronological train/test split, and promoted
+only if it beats the active model on the same held-out window.
+
+The training data comes from scripts/generate_data.py and lives in its own
+database, never the application's, so synthetic labels cannot mix with real
+ones.
+
+Usage:
+    python -m app.ML.train_model                       # generate 50k rows if needed, then train
+    python -m app.ML.train_model --regenerate          # replace the synthetic data first
+    python -m app.ML.train_model --transactions 5000   # a quicker, smaller run
+"""
+import argparse
 import os
 import sys
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score
+import time
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from app.features import BASELINE_FEATURES
-from app.ML.registry import activate, save_model
+from scripts.generate_data import DEFAULT_DATABASE, GeneratorConfig, generate   # noqa: E402  (sets env first)
 
-# Synthetic training data with meaningful fraud signals:
-# Features: amount, amount_deviation (ratio to user avg), is_new_location,
-#           is_flagged_device (shared by 3+ users), transaction_velocity (last 2 min)
-data = {
-    "amount":            [100,  200,  50,   300,  150,  75,   250,  400,  180,  90,
-                          5000, 7000, 10000, 8000, 6000, 9000, 5500, 7500, 6500, 8500],
-    "amount_deviation":  [1.0,  1.1,  0.9,  1.2,  1.0,  0.8,  1.3,  1.5,  1.1,  0.9,
-                          10.0, 15.0, 20.0, 12.0, 8.0,  18.0, 11.0, 14.0, 9.0,  16.0],
-    "is_new_location":   [0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
-                          1,    1,    1,    1,    0,    1,    1,    0,    1,    1],
-    "is_flagged_device": [0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
-                          0,    1,    1,    0,    1,    1,    0,    1,    0,    1],
-    "velocity_2m":       [1,    2,    1,    3,    2,    1,    2,    1,    3,    2,
-                          1,    2,    8,    6,    10,   7,    3,    5,    4,    9],
-    "fraud":             [0,    0,    0,    0,    0,    0,    0,    0,    0,    0,
-                          1,    1,    1,    1,    1,    1,    1,    1,    1,    1],
-}
+from sqlalchemy import create_engine                                            # noqa: E402
+from sqlalchemy.orm import sessionmaker                                         # noqa: E402
 
-df = pd.DataFrame(data)
+from app import models                                                          # noqa: E402
+from app.database import Base                                                   # noqa: E402
+from scripts.retrain import run                                                 # noqa: E402
 
-# The 20 hand-written rows only describe the five baseline features. T-18
-# brings data rich enough to train on the full FEATURE_ORDER.
-X = df[BASELINE_FEATURES]
-y = df["fraud"]
 
-model = RandomForestClassifier(n_estimators=100, random_state=42)
-model.fit(X, y)
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Train the fraud model on synthetic data.")
+    parser.add_argument("--database", default=DEFAULT_DATABASE)
+    parser.add_argument("--transactions", type=int, default=GeneratorConfig.transactions)
+    parser.add_argument("--users", type=int, default=GeneratorConfig.users)
+    parser.add_argument("--seed", type=int, default=GeneratorConfig.seed)
+    parser.add_argument("--regenerate", action="store_true", help="replace existing synthetic data")
+    parser.add_argument("--no-activate", action="store_true", help="register a winning model without activating it")
+    args = parser.parse_args(argv)
 
-# Fit and scored on the same 20 rows, so this AUC says nothing about
-# generalisation - it is named in_sample_auc so no one mistakes it for a
-# holdout metric. T-18 replaces this data; T-19 the algorithm.
-in_sample_auc = roc_auc_score(y, model.predict_proba(X)[:, 1])
+    if args.database.startswith("sqlite:///"):
+        os.makedirs(os.path.dirname(args.database[len("sqlite:///"):]) or ".", exist_ok=True)
+    engine = create_engine(args.database)
+    Base.metadata.create_all(bind=engine)
 
-manifest = save_model(
-    model,
-    algorithm="RandomForestClassifier",
-    training_rows=len(df),
-    metrics={"in_sample_auc": in_sample_auc},
-)
-activate(manifest.version)
-print(f"Model {manifest.version} trained, saved and activated")
+    with sessionmaker(bind=engine)() as db:
+        if args.regenerate or db.query(models.Transaction).count() == 0:
+            started = time.time()
+            report = generate(db, GeneratorConfig(transactions=args.transactions, users=args.users,
+                                                  seed=args.seed), reset=True)
+            print(f"Generated {report.transactions} transactions ({report.fraud_rate:.2%} fraud) "
+                  f"in {time.time() - started:.0f}s: {dict(report.patterns)}")
+
+        started = time.time()
+        result = run(db=db, activate_on_win=not args.no_activate)
+
+    print(f"\nTraining finished in {time.time() - started:.0f}s: {result.reason}")
+    if result.challenger_metrics:
+        m = result.challenger_metrics
+        print(f"Challenger  AUC {m['auc']:.4f}  PR-AUC {m['average_precision']:.4f}  "
+              f"recall@1%FPR {m['recall_at_1pct_fpr']:.2%}")
+    if result.champion_metrics.get("average_precision") is not None:
+        m = result.champion_metrics
+        print(f"Champion    AUC {m['auc']:.4f}  PR-AUC {m['average_precision']:.4f}  "
+              f"recall@1%FPR {m['recall_at_1pct_fpr']:.2%}")
+    if result.manifest:
+        print(f"Registered {result.manifest.version}")
+    return 0 if result.challenger_metrics else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

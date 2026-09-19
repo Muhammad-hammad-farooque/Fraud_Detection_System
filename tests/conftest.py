@@ -55,6 +55,9 @@ app.dependency_overrides[get_db] = override_get_db
 @pytest.fixture(autouse=True)
 def reset_db():
     """Drop and recreate all tables before each test for full isolation."""
+    from app.repositories.transaction_repo import clear_population_snapshots
+
+    clear_population_snapshots()          # day snapshots describe the history just dropped
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield

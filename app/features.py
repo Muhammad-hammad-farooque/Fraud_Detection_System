@@ -199,10 +199,11 @@ class DeviceAggregates:
 
 @dataclass(frozen=True)
 class PopulationAggregates:
-    """Everyone's history before the candidate's timestamp."""
-    amount_rank: int = 0            # prior transactions with a smaller amount
-    total_count: int = 0
-    merchant_labelled: int = 0      # confirmed outcomes at the candidate's merchant
+    """Everyone's history. The amount percentile is as of the start of the
+    candidate's UTC day (a daily snapshot, T-18); the merchant evidence is as
+    of the candidate's timestamp."""
+    amount_percentile: float | None = None   # None: no population yet
+    merchant_labelled: int = 0               # confirmed outcomes at the candidate's merchant
     merchant_fraud: int = 0
 
 
@@ -355,7 +356,7 @@ def compute_features(
         zscore = 0.0
     else:
         zscore = (txn.amount - user.avg_amount) / user.amount_std
-    percentile = population.amount_rank / population.total_count if population.total_count else 0.5
+    percentile = 0.5 if population.amount_percentile is None else population.amount_percentile
     ratio_to_max = 1.0 if cold or user.max_amount <= 0 else txn.amount / user.max_amount
 
     # Device

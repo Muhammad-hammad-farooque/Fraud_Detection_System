@@ -77,6 +77,12 @@ class Transaction(Base):
     __table_args__ = (
         # Every scoring query filters on exactly this pair.
         Index("ix_txn_user_created", "user_id", "created_at"),
+        # The device, merchant and population aggregates (T-16) filter on
+        # these. Without them each is a full scan, which retraining repeats
+        # once per labelled row (T-18).
+        Index("ix_txn_device_created", "device_id", "created_at"),
+        Index("ix_txn_merchant_created", "merchant_id", "created_at"),
+        Index("ix_txn_amount_created", "amount", "created_at"),
         # One transaction per customer per key. NULL keys never collide, so
         # requests without the header are unaffected.
         UniqueConstraint("user_id", "idempotency_key", name="uq_txn_user_idempotency_key"),
@@ -106,6 +112,7 @@ class OutcomeSource(StrEnum):
     CHARGEBACK = "CHARGEBACK"    # authoritative, arrives 30-120 days later
     CUSTOMER   = "CUSTOMER"      # self-reported, weaker
     EXPLORATION = "EXPLORATION"  # random holdout allowed through for unbiased labels
+    SYNTHETIC  = "SYNTHETIC"     # ground truth from scripts/generate_data.py; never in a real database
 
 
 class TransactionOutcome(Base):

@@ -198,11 +198,37 @@ class TestDeviceAndPopulation:
         assert get_device_aggregates(db_session, "never", NOW).user_count == 0
         assert get_device_aggregates(db_session, None, NOW).first_seen_at is None
 
-    def test_population_rank(self, db_session):
+    def test_population_percentile_is_as_of_the_start_of_the_day(self, db_session):
+        """NOW is 12:00; only the 40-day and 3-day rows (100, 150) predate today."""
         _seed(db_session, HISTORY)
-        population = get_population_aggregates(db_session, _candidate(amount=250.0))
-        assert population.total_count == 5
-        assert population.amount_rank == 3                 # 100, 150, 200 are smaller
+        assert get_population_aggregates(db_session, _candidate(amount=125.0)).amount_percentile == 0.5
+        # 250 is below today's 300, but today's rows are not in the snapshot yet.
+        assert get_population_aggregates(db_session, _candidate(amount=250.0)).amount_percentile == 1.0
+        assert get_population_aggregates(db_session, _candidate(amount=50.0)).amount_percentile == 0.0
+
+    def test_no_population_yet_is_none(self, db_session):
+        _seed(db_session, HISTORY)
+        before_everything = _candidate(at=NOW - timedelta(days=60))
+        assert get_population_aggregates(db_session, before_everything).amount_percentile is None
+
+    def test_the_day_snapshot_is_computed_once(self, db_session):
+        _seed(db_session, HISTORY)
+        get_population_aggregates(db_session, _candidate())
+        with QueryCounter(db_session) as counter:
+            get_population_aggregates(db_session, _candidate(amount=999.0))
+        assert counter.count == 1                           # the merchant statement only
+
+    def test_snapshot_percentiles_track_the_true_rank(self, db_session):
+        """1,000 distinct amounts: the snapshot must agree with an exact count to 0.1%."""
+        _users(db_session)
+        for i in range(1000):
+            db_session.add(models.Transaction(user_id=1, amount=float(i + 1), location="L", device_id="d",
+                                              created_at=(NOW - timedelta(days=2, seconds=i)).replace(tzinfo=None)))
+        db_session.commit()
+        for amount in (1.0, 250.5, 500.0, 999.0):
+            exact = sum(1 for i in range(1000) if i + 1 < amount) / 1000
+            got = get_population_aggregates(db_session, _candidate(amount=amount, merchant_id=None)).amount_percentile
+            assert got == pytest.approx(exact, abs=0.001)
 
     def test_population_without_a_merchant(self, db_session):
         _seed(db_session, HISTORY)
@@ -221,9 +247,18 @@ class TestBoundedScoring:
         _seed(db_session, [(1, 100.0 + i, f"city-{i % 5}", "d1", i + 200, {}) for i in range(history_size)])
         candidate = SimpleNamespace(amount=250.0, location="city-1", device_id="d1",
                                     merchant_id="M1", merchant_category="5411")
+        score_transaction(db_session, candidate, user_id=1, now=NOW)       # builds today's snapshot
         with QueryCounter(db_session) as counter:
             score_transaction(db_session, candidate, user_id=1, now=NOW)
         assert counter.count <= 4
+
+    def test_the_first_decision_of_a_day_pays_one_snapshot_query(self, db_session):
+        _seed(db_session, [(1, 100.0 + i, "L", "d1", i + 200, {}) for i in range(50)])
+        candidate = SimpleNamespace(amount=250.0, location="L", device_id="d1",
+                                    merchant_id="M1", merchant_category="5411")
+        with QueryCounter(db_session) as counter:
+            score_transaction(db_session, candidate, user_id=1, now=NOW)
+        assert counter.count <= 5
 
     def test_scoring_does_not_load_transaction_rows(self, db_session):
         """Aggregates only: no statement selects whole transaction rows."""
@@ -241,9 +276,21 @@ class TestBoundedScoring:
             event.remove(engine, "before_cursor_execute", record)
 
         assert statements
+        snapshot = "select transactions.amount from transactions where transactions.created_at <"
         for statement in statements:
             assert "transactions.device_id, transactions.user_id" not in statement
             assert not statement.startswith("select transactions.id, transactions.location")
+            if statement.startswith(snapshot):
+                continue        # the day's population snapshot: one column, once per UTC day
             # The one per-row read is the single previous transaction, limited to one row.
             if "order by" in statement:
                 assert "limit" in statement
+
+        # The snapshot is not re-read for another decision on the same day.
+        statements.clear()
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            features_at(db_session, _candidate(amount=999.0), user_id=1)
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+        assert not any(statement.startswith(snapshot) for statement in statements)
