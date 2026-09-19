@@ -65,7 +65,7 @@ and its acceptance boxes ticked in §12.
 | T-08 · Correctness fix bundle | `2fedbef` | A10, A11, A12, A14 |
 | T-09 · Test infrastructure and rule coverage | `5cff5f0` | A17 |
 | T-10 · Role-based access control | `b1e3e38` | prerequisite for T-12 |
-| T-12 · Analyst case queue | `pending` | A13 (REVIEW / MANUAL_REVIEW) |
+| T-12 · Analyst case queue | `f50ea16` | A13 (REVIEW / MANUAL_REVIEW) |
 
 **Suite:** 324 tests, 99% coverage of `app/`, under 30 seconds.
 
@@ -1170,7 +1170,7 @@ class DecisionAudit(Base):
 
 ---
 
-#### T-12 · Analyst case queue — ✅ DONE (`pending`)
+#### T-12 · Analyst case queue — ✅ DONE (`f50ea16`)
 
 **Depends on:** T-10, T-05
 **Fixes:** A13
