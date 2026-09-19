@@ -4,8 +4,8 @@
 |---|---|
 | **Project** | Fraud Detection System |
 | **Version** | 0.1.0 |
-| **Status** | Working prototype — not production ready. Phases A and B complete. |
-| **Last reviewed** | 2026-09-19 |
+| **Status** | Working prototype — not production ready. Phases A and B complete; Phase C 4 of 7 (T-15, T-16, T-18, T-19). Paused — see §1.5. |
+| **Last reviewed** | 2026-09-19 (paused after T-19) |
 | **Progress** | 19 / 34 tasks · 16 / 18 defects fixed (A10, A18 open) — Phases A and B complete, C under way — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
@@ -50,7 +50,7 @@ nobody wrote a rule for. This is the standard architecture in payments risk.
 
 ### 1.4 Progress
 
-Phases A and B are complete; Phase C has started. Each task below is one commit, with its defects struck through in §4.2
+Phases A and B are complete; Phase C is four tasks in. Each task below is one commit, with its defects struck through in §4.2
 and its acceptance boxes ticked in §12.
 
 | Task | Commit | Fixed |
@@ -122,6 +122,48 @@ when it brings in Alembic.
 **Bootstrapping an admin:** the role endpoint needs an admin to call it, so the first one is
 created out of band with `python -m scripts.set_role someone@bank.com ADMIN`.
 
+### 1.5 Where we left off (2026-09-19)
+
+Work paused after T-19. Everything is committed and pushed; the working tree is clean.
+
+**A decision is open — promote the calibrated LightGBM or keep the forest?**
+T-19's challenger tied the T-18 forest on the synthetic held-out window (PR-AUC 0.8678 vs
+0.8712 — about one transaction with 72 positives) and beat it on ROC AUC, calibration and
+speed, but the gate decides on PR-AUC and kept the forest.
+
+- *Promote it:* closes A10 (the served probability becomes calibrated), makes the amount
+  monotonicity guarantee hold in serving (the `xfail` in `tests/test_calculate_risk.py` then
+  passes and must be removed), and scores in ~0.5 ms. It is a manual override of the gate, so
+  per convention 20 the reason is written beside the manifest. The challenger was not saved -
+  it lost - so promoting means re-running `python -m app.ML.train_model` with an explicit
+  override, which does not exist yet and would need adding.
+- *Keep the forest:* nothing changes; A10 stays open until a LightGBM model wins on merit.
+  T-17's graph features are the most likely thing to break the tie either way.
+
+**Next task:** T-17 (graph features), which also closes A18. T-20 (anomaly layer) and all of
+Phase D are unblocked as well.
+
+**Operational to-dos — not tasks, but required before any real deployment:**
+
+1. Run `migrations/001`-`010` in order on any PostgreSQL database created before them.
+   `010` uses `CREATE INDEX CONCURRENTLY` and must run outside a transaction block.
+2. Create the first admin: `python -m scripts.set_role someone@bank.com ADMIN`.
+3. Schedule `python -m scripts.expire_challenges` (every minute is reasonable).
+4. Replace the step-up `LogSender` with a real delivery channel; it writes one-time codes
+   to the server log. Keep `STEP_UP_DEV_ECHO` off outside local development.
+5. Build and run the Docker image once. It now installs `libgomp1` for LightGBM, and has
+   never been built in this project's sessions — no Docker was available.
+6. Verify on PostgreSQL that sessions run in UTC (`app/database.py` sets it): hour-of-day
+   features depend on it, and the test suite only runs on SQLite.
+
+**Things that are not true yet, however the numbers read:** every model metric in this file
+is measured on synthetic data with patterns this project planted (T-18). Real performance is
+unknown until analyst decisions (T-12) and chargebacks accumulate as labels.
+
+**To reproduce the shipped model:** `python -m app.ML.train_model --regenerate` rebuilds the
+50,000-row synthetic database (`data/`, git-ignored) and runs the same gate. The run takes about
+five minutes.
+
 ---
 
 ## 2. Architecture
@@ -133,7 +175,8 @@ Streamlit UI  --HTTP-->  FastAPI  -->  Router  -->  Service layer  -->  SQLAlche
 (frontend/)              (app/main)   (routers/)   (services/,           (models.py)
                                                     fraud_detection.py)
                                                           |
-                                                          +--> ML model (app/ML/model.pkl)
+                                                          +--> active model (app/ML/artifacts/,
+                                                               scored via app/ML/scorer.py)
 ```
 
 ### 2.2 Scoring pipeline
@@ -239,9 +282,14 @@ Step 3 — Pattern match   : non-fraud txn AND first ever claim -> APPROVED
 ### 3.4 MLOps scripts
 
 **`scripts/retrain.py`** — champion/challenger retraining. Loads confirmed outcomes only,
-drops labels younger than 90 days, rebuilds features through `app/features.py`, splits
-chronologically, trains a challenger, compares AUC-ROC against the deployed model, and
-replaces `model.pkl` only if the challenger wins. Logs to `logs/retrain.log`.
+drops labels younger than 90 days, rebuilds all 42 features with the queries serving uses
+(as of each row's timestamp), splits chronologically, and trains a calibrated LightGBM
+challenger with capacity chosen on the training window. It is registered and activated only
+if it beats the active model on PR-AUC without losing more than 0.01 ROC AUC on the same
+held-out window. Logs to `logs/retrain.log`.
+
+**`app/ML/train_model.py`** — the same pipeline run on synthetic data from
+`scripts/generate_data.py`, which is how the shipped model was produced.
 
 **`scripts/monitor.py`** — performance monitoring over a rolling window. Reports labelled
 coverage, confusion matrix, precision, recall, F1, false positive rate, the business metrics
@@ -335,8 +383,9 @@ could not be built because the columns did not exist. Add: `merchant_id`, `merch
    - keep rules only as **hard overrides** (blocklist to instant reject, trusted customer to bypass) and let the model own the continuous score
 2. **Swap RandomForest for gradient boosting** — LightGBM, XGBoost or CatBoost. Consistently
    better on tabular fraud, native categorical handling, stronger under class imbalance,
-   faster inference.
-3. **Calibrate the probability** with `CalibratedClassifierCV`, since the score is consumed numerically.
+   faster inference. **Built in T-19; tied the forest and was not promoted (§1.5).**
+3. **Calibrate the probability** with `CalibratedClassifierCV`, since the score is consumed
+   numerically. **Built in T-19; serves only once a LightGBM model is promoted.**
 4. **Add an unsupervised layer** — IsolationForest or an autoencoder, ensembled with the
    supervised model. Essential because labelled fraud is scarce and *novel* attack patterns
    have no labels at all.
@@ -484,24 +533,24 @@ it trains on its own predictions.
 9. ~~Server-side claim amount validation — fixes A14~~ T-08
 10. ~~True in-memory test DB — fixes A17~~ T-09
 
-### Phase 2 — Make it a fraud *system*
+### Phase 2 — Make it a fraud *system* — **COMPLETE**
 
-11. RBAC with `customer` / `analyst` / `admin`
-12. Case management queue for manual review — fixes A13
-13. Immutable decision audit trail
-14. Model registry and `model_version` stamped on every decision
-15. Config-driven rule thresholds
-16. Idempotency keys — fixes A15
+11. ~~RBAC with `customer` / `analyst` / `admin`~~ T-10
+12. ~~Case management queue for manual review — fixes A13~~ T-12, with T-14b for `STEP_UP`
+13. ~~Immutable decision audit trail~~ T-11
+14. ~~Model registry and `model_version` stamped on every decision~~ T-13
+15. ~~Config-driven rule thresholds~~ T-13
+16. ~~Idempotency keys — fixes A15~~ T-14
 
 ### Phase 3 — Prediction power
 
-17. Expand the transaction schema (merchant, currency, channel, IP, card token)
-18. Multi-window velocity and geo-velocity features
-19. Temporal, amount-shape, device and behavioural-deviation features
-20. Graph features with `networkx` — fixes A18
-21. Realistic imbalanced training data — fixes A9
-22. LightGBM with calibration — fixes A10
-23. Unsupervised anomaly layer
+17. ~~Expand the transaction schema (merchant, currency, channel, IP, card token)~~ T-15
+18. ~~Multi-window velocity and geo-velocity features~~ T-16
+19. ~~Temporal, amount-shape, device and behavioural-deviation features~~ T-16
+20. Graph features with `networkx` — fixes A18 — **next (T-17)**
+21. ~~Realistic imbalanced training data — fixes A9~~ T-18
+22. LightGBM with calibration — fixes A10 — **built in T-19, not promoted; A10 open (§1.5)**
+23. Unsupervised anomaly layer (T-20)
 24. Cost-based threshold optimisation
 
 ### Phase 4 — Production readiness
