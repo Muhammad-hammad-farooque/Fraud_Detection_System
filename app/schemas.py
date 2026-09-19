@@ -1,7 +1,7 @@
-from pydantic import BaseModel, EmailStr, ConfigDict, Field
+from pydantic import BaseModel, EmailStr, ConfigDict, Field, IPvAnyAddress, field_validator, model_validator
 from datetime import datetime
 
-from .models import Role
+from .models import Channel, Role
 
 # ── User ─────────────────────────────────────────────────────────
 class UserRegister(BaseModel):
@@ -31,10 +31,65 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 # ── Transaction ──────────────────────────────────────────────────
+def _looks_like_card_number(value: str) -> bool:
+    """13-19 digits passing the Luhn check: a primary account number."""
+    digits = value.replace(" ", "").replace("-", "")
+    if not digits.isdigit() or not 13 <= len(digits) <= 19:
+        return False
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        n = int(ch)
+        if i % 2 == 1:
+            n = n * 2 - 9 if n > 4 else n * 2
+        total += n
+    return total % 10 == 0
+
+
 class TransactionCreate(BaseModel):
     location: str
     amount: float
     device_id: str
+
+    # Payment context (T-15). Every field is optional so existing clients keep
+    # working; the engine does not read them until T-16.
+    merchant_id: str | None = Field(default=None, min_length=1, max_length=64)
+    merchant_category: str | None = Field(default=None, pattern=r"^\d{4}$",
+                                          description="ISO 18245 merchant category code")
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$", description="ISO 4217 code")
+    channel: Channel | None = None
+    ip_address: IPvAnyAddress | None = None
+    card_token: str | None = Field(default=None, min_length=1, max_length=64)
+    external_txn_id: str | None = Field(default=None, min_length=1, max_length=128)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+
+    @field_validator("card_token")
+    @classmethod
+    def _not_a_card_number(cls, value: str | None) -> str | None:
+        # PCI DSS: a primary account number must never reach this database.
+        if value is not None and _looks_like_card_number(value):
+            raise ValueError("card_token must be a token from the card vault, not a card number")
+        return value
+
+    @model_validator(mode="after")
+    def _coordinates_come_in_pairs(self) -> "TransactionCreate":
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("latitude and longitude must be sent together")
+        return self
+
+    def orm_fields(self) -> dict:
+        """The payment-context fields as the ORM stores them."""
+        return {
+            "merchant_id": self.merchant_id,
+            "merchant_category": self.merchant_category,
+            "currency": self.currency,
+            "channel": self.channel.value if self.channel else None,
+            "ip_address": str(self.ip_address) if self.ip_address else None,
+            "card_token": self.card_token,
+            "external_txn_id": self.external_txn_id,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+        }
 
 class StepUpInfo(BaseModel):
     """The step-up challenge on a STEP_UP transaction, if it has one."""
@@ -62,6 +117,15 @@ class TransactionResponse(BaseModel):
     location: str
     amount: float
     device_id: str
+    merchant_id: str | None = None
+    merchant_category: str | None = None
+    currency: str | None = None
+    channel: str | None = None
+    ip_address: str | None = None
+    card_token: str | None = None
+    external_txn_id: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     predicted_fraud: bool
     risk_score: float
     risk_level: str

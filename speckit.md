@@ -6,7 +6,7 @@
 | **Version** | 0.1.0 |
 | **Status** | Working prototype — not production ready. Phases A and B complete. |
 | **Last reviewed** | 2026-09-19 |
-| **Progress** | 15 / 34 tasks · 16 / 18 defects fixed — Phases A and B complete — see §1.4 |
+| **Progress** | 16 / 34 tasks · 16 / 18 defects fixed — Phases A and B complete, C started — see §1.4 |
 | **Stack** | FastAPI · SQLAlchemy · PostgreSQL · scikit-learn · Streamlit · Docker |
 
 ---
@@ -50,7 +50,7 @@ nobody wrote a rule for. This is the standard architecture in payments risk.
 
 ### 1.4 Progress
 
-Phases A and B are complete. Each task below is one commit, with its defects struck through in §4.2
+Phases A and B are complete; Phase C has started. Each task below is one commit, with its defects struck through in §4.2
 and its acceptance boxes ticked in §12.
 
 | Task | Commit | Fixed |
@@ -70,9 +70,10 @@ and its acceptance boxes ticked in §12.
 | T-13 · Model registry and config-driven rules | `2d2550c` | — |
 | T-14 · Idempotency | `fcbe145` | A15 |
 | T-14b · Step-up authentication flow | `25c6a57` | A13 (`STEP_UP`) |
+| T-15 · Expand the transaction schema | `pending` | prerequisite for T-16, T-17 |
 
-**Suite:** 443 tests, 99% coverage of `app/`, about a minute and a half (four tests start
-the API in a subprocess to prove startup checks).
+**Suite:** 482 tests, 99% coverage of `app/`, about two minutes (four tests start the API
+in a subprocess to prove startup checks).
 
 **Still open:** A9 (weak training data, T-18) and A18 (`networkx` unused — kept
 deliberately, T-17 uses it). Both close in Phase C.
@@ -85,8 +86,8 @@ which is exactly what `retrain.py` and `monitor.py` read. Retraining still needs
 is now scored on one feature path, decided by a separate policy, recorded immutably, and —
 when it needs a human — routed to an analyst whose determination becomes a training label.
 
-**Next:** Phase C, starting with T-15 (expand the transaction schema), which blocks every
-other prediction-power task. Phase D is independent and can run at any time.
+**Next:** T-16 (feature expansion) — the schema it needs now exists. T-17 (graph features)
+is also unblocked. Phase D is independent and can run at any time.
 
 **Operational to-dos that are not tasks:** schedule `scripts/expire_challenges.py` (every
 minute is reasonable), and replace `LogSender` with a real delivery channel before any
@@ -98,7 +99,7 @@ exactly — a test pins that.
 
 **Carried debt, not yet a task:** schema changes land while `create_all()` is still the only
 deployment path, so `migrations/` holds hand-written DDL for databases created earlier —
-`001` to `007` so far. `007` also settles any transaction left in
+`001` to `008` so far. `007` also settles any transaction left in
 STEP_UP from before T-14b as rejected, since those customers were never challenged. `003` also opens a case for every transaction already sitting in
 REVIEW, so none stay dead ends. `004` adds a trigger that makes `decision_audits`
 append-only in PostgreSQL, and deliberately does *not* backfill audit rows for older
@@ -178,7 +179,10 @@ User (1) ---< (N) Transaction (1) ---< (N) Claim
 
 User         : id, name, email, hashed_password
 Transaction  : id, user_id, location, amount, device_id, predicted_fraud,
-               risk_score, risk_level, decision, policy_version, created_at
+               risk_score, risk_level, decision, policy_version, model_version,
+               resolved_decision, idempotency_key, created_at,
+               merchant_id, merchant_category, currency, channel, ip_address,
+               card_token, external_txn_id, latitude, longitude   (payment context, T-15)
 TransactionOutcome : id, transaction_id, is_fraud_confirmed, source,
                confirmed_by, confirmed_at, notes   (ground truth, T-05)
 Claim        : id, transaction_id, reason, amount, status, created_at
@@ -237,7 +241,7 @@ which is T-12.
 
 ### 3.5 Testing
 
-443 tests across 20 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
+482 tests across 21 modules, run against in-memory SQLite so no PostgreSQL is needed. `conftest.py`
 drops and recreates all tables around every test for full isolation, and provides fixtures
 for a registered user, auth headers, and a second user for cross-tenant isolation checks.
 
@@ -292,8 +296,8 @@ These are defects in existing code, not missing features.
 The engine's ceiling is set by its features, not its model. Five features is roughly 2% of
 what a production fraud engine uses.
 
-**Prerequisite — expand the transaction schema.** Most high-value features cannot be built
-because the columns do not exist. Add: `merchant_id`, `merchant_category`, `currency`,
+**Prerequisite — expand the transaction schema.** ✅ Done in T-15. Most high-value features
+could not be built because the columns did not exist. Add: `merchant_id`, `merchant_category`, `currency`,
 `channel` (web/mobile/pos/atm), `ip_address`, `card_token`, `external_txn_id`.
 
 **Then build these feature families:**
@@ -676,7 +680,7 @@ contract, and a checklist of acceptance criteria. A task is done only when every
 
 1. **One task per commit.** Never combine two task IDs in one change.
 2. **Respect `Depends on`.** Tasks are ordered by dependency; starting out of order will fail.
-3. **Run `pytest` before marking a task done.** The suite must stay green — currently 443 tests.
+3. **Run `pytest` before marking a task done.** The suite must stay green — currently 482 tests.
 4. **Add tests in the same commit as the code.** A task with no new test is not complete.
 5. **Do not change behaviour not named in the task.** Refactors that touch scoring must keep
    existing test expectations passing, or must update them explicitly and say why.
@@ -747,6 +751,9 @@ Decisions made while executing Phase A that later tasks must not silently undo.
     OTP, and later notifications or webhooks — is sent only after the database commit
     succeeds, never inside the transaction. One-time codes are stored only as keyed hashes
     and compared in constant time.
+17. **Card numbers never enter the system.** Only vault tokens are stored, and the API
+    rejects any `card_token` that passes the Luhn check as a 13-19 digit number. The same
+    rule applies to any future field, log line or audit row that could carry a card number.
 
 ### 11.3 Definition of done
 
@@ -1376,7 +1383,7 @@ lifecycle of its own rather than being folded into the analyst queue.
 
 ---
 
-#### T-15 · Expand the transaction schema
+#### T-15 · Expand the transaction schema — ✅ DONE (`pending`)
 
 **Depends on:** T-08
 **Blocks:** T-16, T-17
@@ -1388,12 +1395,31 @@ prerequisite for the rest of Phase C.
 **Add:** `merchant_id`, `merchant_category`, `currency`, `channel` (web/mobile/pos/atm),
 `ip_address`, `card_token`, `external_txn_id`, `latitude`, `longitude`
 
+**As built:**
+
+- Validated at the API: `merchant_category` is a 4-digit ISO 18245 MCC, `currency` an
+  ISO 4217 code, `channel` one of the four values, `ip_address` a real IPv4/IPv6 address,
+  and coordinates are range-checked and accepted only as a pair.
+- `card_token` refuses anything that looks like a raw card number (13-19 digits passing
+  Luhn), so a primary account number cannot reach the database (PCI DSS).
+- The T-14 idempotency fingerprint now hashes only the fields a client sends, so adding
+  optional fields never changes the fingerprint of an old-shape request; a test pins the
+  pre-T-15 hash.
+- `populate_db.py` gives each generated customer consistent cards, favourite merchants,
+  home network and local currency; fraud skews to high-risk MCCs, card-not-present channels
+  and a few shared proxy ranges (useful signal for T-17). A test runs the seeder and
+  requires every generated row to pass the API's own validation.
+- The engine does not read any of these fields yet. T-16 does.
+- Not done: the Streamlit form does not collect the new fields. `populate_db.py` also still
+  scores with the pre-T-03 arithmetic and writes the old `MANUAL_CHECK` label, and writes no
+  audit rows; T-18's `scripts/generate_data.py` supersedes it rather than patching it further.
+
 **Acceptance**
 
-- [ ] Columns added with a migration, all nullable for backward compatibility
-- [ ] `populate_db.py` generates realistic values for every new field
-- [ ] `TransactionCreate` accepts them as optional
-- [ ] Existing tests still pass unchanged
+- [x] Columns added with a migration, all nullable for backward compatibility
+- [x] `populate_db.py` generates realistic values for every new field
+- [x] `TransactionCreate` accepts them as optional
+- [x] Existing tests still pass unchanged
 
 ---
 
@@ -1567,7 +1593,7 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
                       ├── ✅ T-03 scoring ──┬── ✅ T-04 policy ──┐
                       │                     ├── ✅ T-09 tests    │
                       │                     └── ✅ T-13 registry │
-                      └── ✅ T-08 fix bundle ──   T-15 schema ────┼── T-16 features+
+                      └── ✅ T-08 fix bundle ── ✅ T-15 schema ────┼── T-16 features+
                                                                   │   └── T-18 data ── T-19 LightGBM
                                                                   │   └── T-20 anomaly
                                                                   └── T-17 graph
@@ -1581,12 +1607,12 @@ Start anywhere with no unmet dependency. T-01 and T-05 are the two roots.
    Phase D            (independent, can run in parallel throughout)
 ```
 
-**Unblocked right now:** T-15, and all of Phase D. **Phase B is complete.**
+**Unblocked right now:** T-16, T-17, and all of Phase D. **Phase B is complete.**
 
 **Phase B order, as executed:** T-10 → T-12 → T-11 → T-13 → T-14 → T-14b.
 
-**Suggested order for Phase C:** T-15 → T-16 → T-18 → T-19, with T-17 and T-20 once T-15
-and T-16 land. T-18 (realistic data) is what makes every later model comparison meaningful. That finishes the critical
+**Suggested order for Phase C:** ~~T-15~~ → T-16 → T-18 → T-19, with T-17 and T-20 once
+T-16 lands. T-18 (realistic data) is what makes every later model comparison meaningful. That finishes the critical
 path (T-12 and T-11 are its last two links) before the supporting work.
 
 **Critical path to a credible system:** T-01 → T-03 → T-04 → T-05 → T-12 → T-11. ✅ **Complete.**

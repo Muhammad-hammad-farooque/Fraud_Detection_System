@@ -4,6 +4,13 @@ from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime, timezone
 
+class Channel(StrEnum):
+    WEB    = "web"
+    MOBILE = "mobile"
+    POS    = "pos"      # card present, at a terminal
+    ATM    = "atm"
+
+
 class Role(StrEnum):
     CUSTOMER = "CUSTOMER"
     ANALYST  = "ANALYST"
@@ -36,6 +43,19 @@ class Transaction(Base):
     risk_score = Column(Float, default=0.0)
     risk_level = Column(String, default="LOW")
     decision = Column(String, default="ALLOW")
+
+    # Payment context (T-15). All nullable: older rows and clients that do not
+    # send them stay valid. T-16 builds merchant, channel, network and
+    # geo-velocity features on these.
+    merchant_id       = Column(String(64), nullable=True)
+    merchant_category = Column(String(4), nullable=True)     # ISO 18245 MCC, e.g. "5411"
+    currency          = Column(String(3), nullable=True)     # ISO 4217, e.g. "PKR"
+    channel           = Column(String(8), nullable=True)     # Channel
+    ip_address        = Column(String(45), nullable=True)    # IPv4 or IPv6
+    card_token        = Column(String(64), nullable=True)    # a token, never a card number
+    external_txn_id   = Column(String(128), nullable=True)   # the processor's own reference
+    latitude          = Column(Float, nullable=True)
+    longitude         = Column(Float, nullable=True)
     policy_version = Column(String, nullable=True)
     model_version = Column(String, nullable=True)
     # Client-supplied retry key (A15). A repeat of the same key by the same

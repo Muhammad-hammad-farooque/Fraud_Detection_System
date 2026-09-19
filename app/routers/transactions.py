@@ -26,8 +26,14 @@ REPLAY_HEADER = "Idempotent-Replayed"
 
 
 def request_fingerprint(transaction: schemas.TransactionCreate) -> str:
-    """Stable hash of the fields that define the payment."""
-    canonical = json.dumps(transaction.model_dump(), sort_keys=True, separators=(",", ":"))
+    """Stable hash of the fields that define the payment.
+
+    Only fields the client actually sent are hashed, so adding an optional
+    field to TransactionCreate never changes the fingerprint of a request that
+    does not use it - a retry spanning that deploy still replays.
+    """
+    canonical = json.dumps(transaction.model_dump(mode="json", exclude_none=True),
+                           sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -83,6 +89,7 @@ def create_transaction(
         location=transaction.location,
         amount=transaction.amount,
         device_id=transaction.device_id,
+        **transaction.orm_fields(),
         predicted_fraud=predicted_fraud,
         risk_score=risk_score,
         risk_level=risk_level,
