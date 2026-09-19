@@ -73,7 +73,7 @@ and its acceptance boxes ticked in §12.
 | T-15 · Expand the transaction schema | `2a847d1` | prerequisite for T-16, T-17 |
 | T-16 · Feature expansion (retraining moved to T-18) | `05d6902` | two training bugs from T-05 |
 | T-18 · Realistic training data, model retrained on 42 features | `0678d1a` | A9 |
-| T-19 · LightGBM with calibration (built; not promoted — a tie) | `pending` | — |
+| T-19 · LightGBM with calibration (built; not promoted — a tie) | `46ea1df` | — |
 
 **Suite:** 606 tests plus 1 expected failure (strict amount monotonicity, for T-19), about
 three minutes: two modules generate and train on real data, and four tests start the API in
@@ -1631,7 +1631,7 @@ forest collapsed to depth-1 stumps.
 
 ---
 
-#### T-19 · LightGBM with calibration — ✅ DONE (`pending`), challenger not promoted
+#### T-19 · LightGBM with calibration — ✅ DONE (`46ea1df`), challenger not promoted
 
 **Depends on:** T-18
 **Fixes:** A9, A10
