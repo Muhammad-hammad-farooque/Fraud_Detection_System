@@ -72,7 +72,7 @@ and its acceptance boxes ticked in §12.
 | T-14b · Step-up authentication flow | `25c6a57` | A13 (`STEP_UP`) |
 | T-15 · Expand the transaction schema | `2a847d1` | prerequisite for T-16, T-17 |
 | T-16 · Feature expansion (retraining moved to T-18) | `05d6902` | two training bugs from T-05 |
-| T-18 · Realistic training data, model retrained on 42 features | `pending` | A9 |
+| T-18 · Realistic training data, model retrained on 42 features | `0678d1a` | A9 |
 
 **Suite:** 606 tests plus 1 expected failure (strict amount monotonicity, for T-19), about
 three minutes: two modules generate and train on real data, and four tests start the API in
@@ -1544,7 +1544,7 @@ class GraphFeatures:
 
 ---
 
-#### T-18 · Realistic training data — ✅ DONE (`pending`)
+#### T-18 · Realistic training data — ✅ DONE (`0678d1a`)
 
 **Depends on:** T-16
 **Fixes:** A9
